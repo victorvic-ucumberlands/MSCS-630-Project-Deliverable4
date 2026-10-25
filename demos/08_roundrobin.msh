@@ -1,0 +1,85 @@
+# ===== DEMO 08: Round-Robin scheduling of REAL processes =====
+# $BURN is demos/cpuburn: a CPU-bound program that reports how much CPU time it
+# has consumed, so the interleaving of its output shows the shell switching the
+# CPU between real processes.
+sched help
+# ---------------------------------------------------------------------------
+# 1. The textbook example (bursts 24, 3, 3 with a slice of 4) scaled to
+#    milliseconds: two short processes of 75 ms, shorter than the 100 ms slice,
+#    behind a long one.  Expected waiting times: A 150, B 100, C 175 ms.
+#    The event log shows every ARRIVE / DISPATCH / QUANTUM / FINISH decision and
+#    the contents of the ready queue after it.
+# ---------------------------------------------------------------------------
+sched add $BURN A 300 100
+sched add $BURN B 75 25
+sched add $BURN C 75 25
+sched list
+sched run rr -q 100
+# ---------------------------------------------------------------------------
+# 2. The time slice is configurable: the same three processes, different quanta.
+# ---------------------------------------------------------------------------
+sched run rr -q 50 --quiet
+sched run rr -q 200 --quiet
+# a slice longer than every burst makes Round-Robin behave like FCFS
+sched run rr -q 2000 --quiet
+sched run fcfs --quiet
+# ---------------------------------------------------------------------------
+# 3. A process that finishes inside its slice leaves the queue at once and the
+#    next process is dispatched immediately (no waiting for the rest of the slice).
+#    D needs 40 ms of a 200 ms slice; E is dispatched as soon as D exits.
+# ---------------------------------------------------------------------------
+sched clear
+sched add $BURN D 40 20
+sched add $BURN E 120 40
+sched run rr -q 200
+# ---------------------------------------------------------------------------
+# 4. A late arrival: the CPU is idle until the second process is created.
+# ---------------------------------------------------------------------------
+sched clear
+sched add $BURN early 100 50
+sched add -t 400 $BURN late 100 50
+sched run rr -q 50
+# ---------------------------------------------------------------------------
+# 5. Context-switch cost: 20 ms is charged every time the CPU changes hands.
+# ---------------------------------------------------------------------------
+sched clear
+sched add $BURN F 150 150
+sched add $BURN G 150 150
+sched add $BURN H 150 150
+sched run rr -q 50 -c 20 --quiet
+# ---------------------------------------------------------------------------
+# 6. Verbose mode: the state of every task at each event, including the state
+#    the KERNEL reports (T = stopped in the ready queue, R = running).  This is
+#    independent evidence that only the dispatched process is runnable.
+# ---------------------------------------------------------------------------
+sched clear
+sched add $BURN one 150 50
+sched add $BURN two 100 50
+sched run rr -q 100 -v
+# ---------------------------------------------------------------------------
+# 7. Ordinary Linux commands are scheduled the same way.
+# ---------------------------------------------------------------------------
+sched clear
+sched add wc -c scratch.bin
+sched add md5sum scratch.bin
+sched add ls -l scratch.bin
+sched add -o saved_output.txt echo this went to a file
+sched run rr -q 100
+cat saved_output.txt
+rm saved_output.txt
+# ---------------------------------------------------------------------------
+# 8. The report of the last run can be printed again without re-running.
+# ---------------------------------------------------------------------------
+sched stats
+# ---------------------------------------------------------------------------
+# 9. The scheduler itself can run as a background job, so the prompt stays free.
+# ---------------------------------------------------------------------------
+sched clear
+sched add $BURN bg1 200 100
+sched add $BURN bg2 200 100
+sched run rr -q 100 --quiet &
+jobs
+echo the prompt is free while the scheduler runs as job 1
+sleep 1
+jobs
+exit 0

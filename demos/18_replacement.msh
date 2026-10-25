@@ -1,0 +1,63 @@
+# ===== DEMO 18: page replacement - FIFO, LRU (and Clock, OPT) =====
+# ---------------------------------------------------------------------------
+# 1. The textbook reference string with 3 frames, replayed offline: the frame
+#    contents after every reference, F = page fault, 'evicts' = the victim.
+# ---------------------------------------------------------------------------
+mem sim -a fifo -f 3 7,0,1,2,0,3,0,4,2,3,0,3,2,1,2,0,1,7,0,1
+mem sim -a lru -f 3 7,0,1,2,0,3,0,4,2,3,0,3,2,1,2,0,1,7,0,1
+mem sim -a opt -f 3 7,0,1,2,0,3,0,4,2,3,0,3,2,1,2,0,1,7,0,1
+mem sim -a all -f 3 7,0,1,2,0,3,0,4,2,3,0,3,2,1,2,0,1,7,0,1
+# ---------------------------------------------------------------------------
+# 2. The same string made by a REAL process on a machine with 3 frames, under
+#    each policy of the live memory manager.  The fault counts must equal the
+#    offline ones (FIFO 15, LRU 12, Clock 14).
+# ---------------------------------------------------------------------------
+mem config -f 3 -s 16 -d 0
+mem policy fifo
+$DEMOS/memproc fifo 8 7,0,1,2,0,3,0,4,2,3,0,3,2,1,2,0,1,7,0,1 -v
+mem policy lru
+$DEMOS/memproc lru 8 7,0,1,2,0,3,0,4,2,3,0,3,2,1,2,0,1,7,0,1 -v
+mem policy clock
+$DEMOS/memproc clock 8 7,0,1,2,0,3,0,4,2,3,0,3,2,1,2,0,1,7,0,1
+mem ps -a
+# ---------------------------------------------------------------------------
+# 3. The live frame table during replacement: FIFO order, LRU rank, reference bits.
+# ---------------------------------------------------------------------------
+mem policy lru
+$DEMOS/memproc look 5 0w,1,2,0,3,0 --hold 300 &
+sleep 0.15
+mem frames
+mem pt %1
+sleep 0.3
+# ---------------------------------------------------------------------------
+# 4. Belady's anomaly: with FIFO, MORE frames can give MORE faults; LRU (a
+#    stack algorithm) never does.
+# ---------------------------------------------------------------------------
+mem sim -a fifo -f 3 1,2,3,4,1,2,5,1,2,3,4,5 -q
+mem sim -a fifo -f 4 1,2,3,4,1,2,5,1,2,3,4,5 -q
+mem sim -a all -f 1-7 1,2,3,4,1,2,5,1,2,3,4,5
+mem config -f 3
+mem policy fifo
+$DEMOS/memproc belady3 6 1,2,3,4,1,2,5,1,2,3,4,5
+mem config -f 4
+$DEMOS/memproc belady4 6 1,2,3,4,1,2,5,1,2,3,4,5
+# ---------------------------------------------------------------------------
+# 5. Workloads: a loop one page larger than memory (LRU's worst case), random
+#    references, and references with locality (a working set of 6 pages).
+# ---------------------------------------------------------------------------
+mem sim -a all -f 4 loop:5:20 -q
+mem sim -a all -f 4 rand:1000:10:1 -q
+mem sim -a all -f 1-10 local:2000:32:6:1
+# ---------------------------------------------------------------------------
+# 6. Writes: a dirty victim must be written back to swap, a clean one is just
+#    dropped.  Live and offline agree on faults and write-backs.
+# ---------------------------------------------------------------------------
+mem sim -a all -f 4 rand:400:8:3:50 -q
+mem config -f 4
+mem policy fifo
+$DEMOS/memproc wf 8 rand:400:8:3:50
+mem policy lru
+$DEMOS/memproc wl 8 rand:400:8:3:50
+mem ps -a
+mem stats
+exit 0

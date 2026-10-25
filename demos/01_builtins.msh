@@ -1,0 +1,63 @@
+# ===== DEMO 01: built-in commands (normal behaviour) =====
+help
+# --- pwd / mkdir / cd ---
+pwd
+mkdir project
+mkdir -p project/src/deep
+cd project
+pwd
+cd src
+pwd
+cd -
+cd
+pwd
+cd -
+# --- echo: plain, -n, quoting, escapes, variables ---
+echo hello world
+echo -n no newline
+echo
+echo "  keeps   spaces  "
+echo 'single $HOME not expanded'
+echo "double $USER_UNSET_VAR| expands to empty"
+echo escaped\ space and \$dollar
+echo last status is $? and shell pid is $$
+# --- touch / ls / cat with redirection ---
+touch alpha.txt beta.txt .hidden
+ls
+ls -a
+echo first line > alpha.txt
+echo second line >> alpha.txt
+cat alpha.txt
+cat alpha.txt beta.txt
+ls -l
+ls src
+ls -l alpha.txt src
+# touch updates the timestamp of an existing file (mtime changes, size does not)
+ls -l alpha.txt
+sleep 2
+touch alpha.txt
+ls -l alpha.txt
+# --- stdin / stderr redirection ---
+cat < alpha.txt
+cat nosuchfile 2> errors.txt
+cat errors.txt
+# --- rm / rmdir ---
+rm beta.txt
+rm -f beta.txt
+rmdir src/deep
+rmdir src
+ls
+cd ..
+rm project/alpha.txt project/.hidden project/errors.txt
+rmdir project
+ls
+# --- clear (stdout is not a terminal here, so it explains itself) ---
+clear
+# --- external command + exit status ---
+echo external command follows:
+/bin/echo "hello from /bin/echo (a forked+exec'd child)"
+true
+echo true gives $?
+false
+echo false gives $?
+exit 0

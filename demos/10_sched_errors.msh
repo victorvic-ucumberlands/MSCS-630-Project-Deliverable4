@@ -1,0 +1,89 @@
+# ===== DEMO 10: scheduler error handling, adversarial and corner cases =====
+# --- nothing queued yet ---
+sched run rr
+sched run priority
+sched compare
+sched stats
+sched list
+# --- invalid task definitions ---
+sched add
+sched add -p
+sched add -t
+sched add -o
+sched add -p 100 true
+sched add -p -1 true
+sched add -p abc true
+sched add -t -5 true
+sched add -t 999999999 true
+sched add -z true
+sched add -p 5
+# --- queue editing errors ---
+sched add -p 4 $BURN keep 50 50
+sched remove
+sched remove 99
+sched remove abc
+sched remove 0
+sched list
+sched remove 1
+sched list
+# --- invalid run options ---
+sched add $BURN T1 60 60
+sched run
+sched run bogus
+sched run rr -q 0
+sched run rr -q -5
+sched run rr -q abc
+sched run rr -q
+sched run rr -c
+sched run rr -c abc
+sched run rr -T 1
+sched run rr --nonsense
+sched run rr -v --quiet
+sched run rr -q 10 --no-preempt
+sched run priority -q 10
+sched run fcfs -q 10
+sched compare -q
+sched compare -q 10,abc
+sched compare -z
+sched nonsense
+sched help
+# --- a command that does not exist: the process is created, exec fails, 127 ---
+sched clear
+sched add definitely_no_such_program_xyz
+sched add -p 2 /etc
+sched add -p 3 -o /nonexistent_dir/out.txt echo hello
+sched run priority
+# --- a process that kills itself, and one that exits with a non-zero status ---
+sched clear
+sched add sh -c 'kill -9 $$'
+sched add sh -c 'exit 3'
+sched add sh -c 'kill -SEGV $$'
+sched run fcfs
+# --- a process that ignores SIGTERM: the time budget ends the run and the
+#     shell escalates to SIGKILL, so nothing is left behind ---
+sched clear
+sched add sh -c 'trap "" TERM; while :; do :; done'
+sched run rr -q 150 -T 600 --quiet
+echo "budget run status=$? (1 = budget exceeded)"
+ps -o pid,stat,args --ppid $$ --no-headers
+# --- a single task, and a task that needs no CPU at all ---
+sched clear
+sched add true
+sched run rr -q 100 --quiet
+sched clear
+sched add -t 300 true
+sched run fcfs --quiet
+# --- an I/O-bound process: with block detection (the default) a sleeping
+#     process gives the CPU away even under FCFS; with it switched off it holds
+#     the CPU while it sleeps, and only a time slice limits the damage ---
+sched clear
+sched add sleep 0.4
+sched add $BURN busy 150 50
+sched run fcfs
+sched run fcfs --no-block-detect --quiet
+sched run rr -q 100 --no-block-detect --quiet
+# --- the scheduler queue is independent of ordinary job control ---
+sched clear
+jobs
+echo "shell still alive after every scheduler error, status=$?"
+exit 0

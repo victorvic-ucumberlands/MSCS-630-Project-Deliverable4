@@ -1,0 +1,111 @@
+# ===== DEMO 03: error handling for invalid commands and inputs =====
+# --- unknown / unusable commands ---
+nosuchcommand
+echo status=$?
+./nosuchdir/prog
+echo status=$?
+touch noexec.sh
+./noexec.sh
+echo status=$? "(126 = found but not executable)"
+/tmp
+echo status=$? "(directory used as command)"
+rm noexec.sh
+# --- cd errors ---
+cd /does/not/exist
+cd a b c
+touch plainfile
+cd plainfile
+cd -
+rm plainfile
+# with a previous directory, cd - works and prints it
+cd /tmp
+cd -
+# --- ls / cat errors ---
+ls /does/not/exist
+ls -z
+cat /does/not/exist
+cat /tmp
+touch locked.txt
+chmod 000 locked.txt
+# (denied for a normal user; root bypasses file permissions, so no error is shown as root)
+cat locked.txt
+rm -f locked.txt
+# --- mkdir / rmdir / rm / touch errors ---
+mkdir
+mkdir /proc/forbidden
+mkdir existing_dir
+mkdir existing_dir
+mkdir -p /dev/null/x
+rmdir
+rmdir nonexistent_dir
+touch inner_file
+mkdir busy_dir
+touch busy_dir/inner_file
+rmdir busy_dir
+rmdir inner_file
+rm
+rm nonexistent_file
+rm -f nonexistent_file
+echo status after rm -f of missing file = $?
+rm busy_dir
+rm -r busy_dir
+touch
+touch /does/not/exist/file
+touch /proc/forbidden
+# cleanup of the scratch objects
+rm busy_dir/inner_file inner_file
+rmdir busy_dir existing_dir
+# --- kill errors ---
+kill
+kill abc
+kill 99999999
+kill -9 999999
+kill -BOGUS 1234
+kill -s
+kill 0
+kill -9 -1
+kill 12abc
+kill $$
+kill %1
+kill %abc
+kill -l
+# --- job control errors (no jobs exist) ---
+jobs
+fg
+bg
+fg %99
+fg abc
+bg %0
+fg 1 2
+# --- exit argument errors (shell must NOT exit on these) ---
+exit abc
+exit 1 2
+echo still alive after bad exit args
+# --- syntax errors: nothing on the line may run ---
+echo "unterminated
+echo 'unterminated
+echo trailing\
+echo part-one-should-not-print ; echo "bad
+echo a | echo b
+echo a && echo b
+echo a || echo b
+; echo leading semicolon
+echo a ; ; echo b
+&
+echo hi >
+echo hi > >> file
+> out.txt
+echo ${}
+echo ${bad name}
+cat < /does/not/exist
+echo x > /does/not/exist/out
+echo status=$?
+echo x > /proc/forbidden
+# builtin redirection failure must not leave stdout redirected:
+echo stdout is still the terminal
+# --- empty and whitespace-only lines are ignored ---
+
+   	  
+# comment only
+echo after blank lines, status=$?
+exit 0

@@ -1,0 +1,90 @@
+# ===== DEMO 19: memory manager - invalid input, adversarial and corner cases =====
+# --- invalid configuration -----------------------------------------------------
+mem config -f 0
+mem config -f 5000
+mem config -f
+mem config -f abc
+mem config -p 1000
+mem config -p 128
+mem config -s 70000
+mem config -d 2000
+mem config -a bogus
+mem config -z
+mem policy bogus
+mem policy lru extra
+mem nonsense
+# --- invalid inspection requests ----------------------------------------------
+mem pt
+mem pt abc
+mem pt 999999
+mem pt %9
+mem ps -z
+mem trace sideways
+mem peek nosuch
+mem peek
+mem shm rm nosuch
+mem shm bogus
+# --- invalid simulations --------------------------------------------------------
+mem sim
+mem sim 1,2,3
+mem sim -f 0 1,2,3
+mem sim -f 65 1,2,3
+mem sim -f 5-2 1,2,3
+mem sim -a bogus -f 3 1,2,3
+mem sim -f 3 1,a,3
+mem sim -f 3 rand:5
+mem sim -f 3 loop:0:3
+mem sim -f 3 1,2 3,4
+mem sim -f 3 -x 1,2
+# --- corner cases of the simulation: one frame, one page, a single reference --
+mem sim -a all -f 1 1,2,1,2 -q
+mem sim -a all -f 4 5,5,5,5 -q
+mem sim -a all -f 3 9 -q
+# --- the geometry cannot change while memory is in use ---------------------------
+mem config -f 4 -s 8
+$DEMOS/memproc holder 2 0w,1w --hold 600 &
+sleep 0.2
+mem config -f 8
+mem config -d 5
+mem config -d 0
+sleep 0.6
+mem config -f 8
+mem config -f 4 -s 8
+# --- the kernel interface: every request with bad arguments --------------------
+$DEMOS/mktest api
+$DEMOS/mktest garbage
+$DEMOS/mktest twice
+# shared segments outlive their processes (like System V shared memory) until removed
+mem shm
+mem shm rm mktest-seg
+# --- misuse of the test program; and a program not started by myshell -------------
+$DEMOS/memproc
+$DEMOS/memproc A 0 1
+$DEMOS/memproc A 3 bogus
+sh -c 'unset MYSHELL_KERNEL; exec "$0" A 3 0,1' $DEMOS/memproc
+# --- a process killed while holding memory: everything is freed ---------------
+$DEMOS/memproc victim 4 loop:4:1000 -r 1000 -W &
+sleep 0.2
+mem
+kill -9 %1
+sleep 0.2
+mem
+# --- memory overflow under pressure: 12 processes x 3 pages on 4 frames, all at
+#     once.  Every page is evicted and read back many times; no data is lost. --
+mem config -f 4 -s 40
+$DEMOS/memproc p1 3 loop:3:40 -W -s 1 & $DEMOS/memproc p2 3 loop:3:40 -W -s 1 & $DEMOS/memproc p3 3 loop:3:40 -W -s 1 & $DEMOS/memproc p4 3 loop:3:40 -W -s 1 & $DEMOS/memproc p5 3 loop:3:40 -W -s 1 & $DEMOS/memproc p6 3 loop:3:40 -W -s 1 &
+$DEMOS/memproc p7 3 rand:120:3:7:50 -s 1 & $DEMOS/memproc p8 3 rand:120:3:8:50 -s 1 & $DEMOS/memproc p9 3 rand:120:3:9:50 -s 1 & $DEMOS/memproc p10 3 rand:120:3:10:50 -s 1 & $DEMOS/memproc p11 3 rand:120:3:11:50 -s 1 & $DEMOS/memproc p12 3 rand:120:3:12:50 -s 1 &
+sleep 3
+jobs
+mem
+# --- swap exhausted: RAM + swap = 44 pages; the 15th process of 3 pages fails ----
+$DEMOS/memproc q1 3 0 --hold 800 & $DEMOS/memproc q2 3 0 --hold 800 & $DEMOS/memproc q3 3 0 --hold 800 & $DEMOS/memproc q4 3 0 --hold 800 & $DEMOS/memproc q5 3 0 --hold 800 & $DEMOS/memproc q6 3 0 --hold 800 & $DEMOS/memproc q7 3 0 --hold 800 &
+$DEMOS/memproc q8 3 0 --hold 800 & $DEMOS/memproc q9 3 0 --hold 800 & $DEMOS/memproc q10 3 0 --hold 800 & $DEMOS/memproc q11 3 0 --hold 800 & $DEMOS/memproc q12 3 0 --hold 800 & $DEMOS/memproc q13 3 0 --hold 800 & $DEMOS/memproc q14 3 0 --hold 800 &
+sleep 0.3
+mem
+$DEMOS/memproc q15 3 0
+echo status=$?
+sleep 1
+mem
+echo "shell alive after every memory error, status=$?"
+exit 0

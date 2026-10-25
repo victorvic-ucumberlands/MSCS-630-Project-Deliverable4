@@ -1,0 +1,88 @@
+# ===== DEMO 04: adversarial and corner cases =====
+# --- awkward file names: spaces, quotes, leading dash, unicode ---
+touch "my file" 'has"quote' -- -dash "héllo✓.txt"
+ls
+rm -- -dash
+rm "my file" 'has"quote' "héllo✓.txt"
+ls
+# --- operators inside quotes are plain text; glued '&' still backgrounds ---
+echo "a & b ; c | d > e < f # g"
+echo a&echo b
+sleep 1&
+sleep 2
+# --- unusual expansions ---
+echo $
+echo "$"
+echo cost: $5
+echo ${HOME}/x ~/y "~/z"
+echo [$DEFINITELY_UNSET] [${DEFINITELY_UNSET}]
+echo "héllo ✓ 日本語"
+# --- redirecting a built-in must not leak into later commands ---
+echo captured > out.txt
+echo this goes to the terminal
+cat out.txt
+echo appended >> out.txt
+cat out.txt
+ls nosuch 2>> out.txt
+cat out.txt
+rm out.txt
+# --- the cwd is deleted underneath us ---
+mkdir gone
+cd gone
+rmdir ../gone
+pwd
+ls
+cd -
+pwd
+# --- background job must not steal the script input (stdin is /dev/null) ---
+cat &
+echo this line was not swallowed by the background cat
+sleep 1
+# --- many background jobs at once, all reaped, no zombies left ---
+sleep 1 &
+sleep 1 &
+sleep 1 &
+sleep 1 &
+sleep 1 &
+sleep 1 &
+sleep 1 &
+sleep 1 &
+jobs -p
+sleep 2
+jobs
+echo zombie check - expect no output between the markers:
+echo ---begin---
+ps -o pid,stat,args --ppid $$ --no-headers
+echo ---end---
+# --- fg/bg on jobs that do not fit the state ---
+sleep 1 &
+bg %
+fg %
+echo status=$?
+fg %
+echo fg on a finished job fails, status=$?
+# --- process that ignores SIGTERM: TERM does nothing, KILL works ---
+/bin/sh -c 'trap "" TERM; while :; do sleep 0.1; done' &
+sleep 1
+kill %
+jobs
+kill -KILL %
+jobs
+# --- kill on a stopped job: terminating signal is delivered (shell wakes it) ---
+sleep 100 &
+kill -STOP %
+jobs
+kill -TERM %
+jobs
+# --- signal 0 only probes; pid reuse / bad targets ---
+sleep 5 &
+kill -0 %
+kill -0 99999999
+kill -0 1
+kill -TERM %
+# --- exit-status conventions ---
+/bin/sh -c 'kill -9 $$'
+echo "killed by SIGKILL -> $?"
+/bin/sh -c 'exit 300'
+echo exit 300 wraps to $?
+exit 256

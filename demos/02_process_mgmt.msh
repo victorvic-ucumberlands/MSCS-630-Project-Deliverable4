@@ -1,0 +1,57 @@
+# ===== DEMO 02: foreground / background processes and job control =====
+# --- foreground: shell blocks until the child exits; $? carries its status ---
+echo shell pid is $$
+/bin/sh -c 'echo child pid=$$ parent=$PPID pgid=$(ps -o pgid= -p $$)'
+sleep 1
+echo foreground sleep finished, status=$?
+/bin/sh -c 'exit 42'
+echo child exited with $?
+# --- background: prompt returns immediately, job gets [id] pid ---
+sleep 3 &
+sleep 4 &
+sleep 5 &
+jobs
+jobs -l
+jobs -p
+# process table evidence: children of this shell, each its own process group
+ps -o pid,ppid,pgid,stat,args --ppid $$
+# --- stop (SIGSTOP), resume in background (bg), bring to foreground (fg) ---
+kill -STOP %3
+jobs
+ps -o pid,ppid,pgid,stat,args --ppid $$
+bg %3
+jobs
+# --- fg on a running background job: shell waits for it ---
+fg %1
+echo fg returned, status=$?
+# --- finished background jobs are reported (reaped, no zombies) ---
+sleep 2
+jobs
+ps -o pid,ppid,stat,args --ppid $$
+# --- kill a background job by job id and by pid ---
+sleep 100 &
+sleep 101 &
+jobs -p
+kill %1
+kill -9 %2
+jobs
+# --- fg / bg with default (current) job, stop then fg ---
+sleep 2 &
+kill -STOP %
+jobs
+fg
+echo resumed via fg and finished, status=$?
+# --- background job with non-zero exit and one killed by a signal ---
+/bin/sh -c 'sleep 1; exit 3' &
+/bin/sh -c 'sleep 1; kill -SEGV $$' &
+sleep 2
+jobs
+# --- foreground job killed by a signal ---
+/bin/sh -c 'kill -TERM $$'
+echo status after signal death = $?
+# --- built-in in background runs in a forked child ---
+echo run in background child &
+sleep 1
+# --- job accounting records (what a scheduler will consume later) ---
+jobs -a
+exit

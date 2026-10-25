@@ -1,0 +1,52 @@
+# ===== DEMO 22: the Dining Philosophers with real processes =====
+# $DEMOS/philo ID N MEALS: philosopher ID needs mutexes fork(ID) and fork(ID+1 mod N).
+# ---------------------------------------------------------------------------
+# 1. Naive: everyone takes the left fork, pauses, then reaches for the right.
+#    All five hold one fork and wait for the next: a cycle.  The shell detects
+#    the deadlock and names the cycle.
+# ---------------------------------------------------------------------------
+$DEMOS/philo 0 5 2 --naive --pause 100 & $DEMOS/philo 1 5 2 --naive --pause 100 & $DEMOS/philo 2 5 2 --naive --pause 100 & $DEMOS/philo 3 5 2 --naive --pause 100 & $DEMOS/philo 4 5 2 --naive --pause 100 &
+sleep 1.5
+sem
+sched ps
+sem deadlock
+# Recovery: kill one philosopher.  The shell releases the fork it held (robust
+# mutex), the cycle is broken and the others finish.
+sem trace on
+kill %1
+sleep 1
+sem trace off
+jobs
+sem
+sem reset
+# ---------------------------------------------------------------------------
+# 2. Resource ordering: every philosopher takes the LOWER-numbered fork first.
+#    Philosopher 4 reaches for fork 0 before fork 4, so no cycle can form.
+#    Same pause, no deadlock; every philosopher eats every meal.
+# ---------------------------------------------------------------------------
+$DEMOS/philo 0 5 3 --ordered --pause 100 & $DEMOS/philo 1 5 3 --ordered --pause 100 & $DEMOS/philo 2 5 3 --ordered --pause 100 & $DEMOS/philo 3 5 3 --ordered --pause 100 & $DEMOS/philo 4 5 3 --ordered --pause 100 &
+sleep 4
+jobs
+sem deadlock
+sem
+sem reset
+# ---------------------------------------------------------------------------
+# 3. A waiter: a counting semaphore 'room' admits at most N-1 = 4 philosophers
+#    to the table, so at least one of them can always pick up both forks.
+# ---------------------------------------------------------------------------
+$DEMOS/philo 0 5 3 --waiter --pause 100 & $DEMOS/philo 1 5 3 --waiter --pause 100 & $DEMOS/philo 2 5 3 --waiter --pause 100 & $DEMOS/philo 3 5 3 --waiter --pause 100 & $DEMOS/philo 4 5 3 --waiter --pause 100 &
+sleep 0.3
+sem
+sleep 4
+jobs
+# ---------------------------------------------------------------------------
+# 4. Deadlock avoidance by the shell: with --deadlock fail the lock that would
+#    close the cycle is refused (EDEADLK); the naive philosopher puts its fork
+#    down, backs off and tries again - everyone eats.
+# ---------------------------------------------------------------------------
+sem config --deadlock fail
+$DEMOS/philo 0 5 2 --naive --pause 100 & $DEMOS/philo 1 5 2 --naive --pause 100 & $DEMOS/philo 2 5 2 --naive --pause 100 & $DEMOS/philo 3 5 2 --naive --pause 100 & $DEMOS/philo 4 5 2 --naive --pause 100 &
+sleep 4
+jobs
+sem config --deadlock report
+exit 0

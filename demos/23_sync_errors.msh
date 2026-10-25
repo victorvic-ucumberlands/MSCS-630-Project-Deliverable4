@@ -1,0 +1,74 @@
+# ===== DEMO 23: semaphores and mutexes - invalid input, adversarial and corner cases =====
+# --- invalid commands -------------------------------------------------------------
+sem create
+sem create -m
+sem create a -1
+sem create a abc
+sem create a 1 2
+sem create a_name_that_is_far_too_long_for_a_semaphore_x 1
+sem create a 1
+sem create a 1
+sem create -m a
+sem post
+sem post nosuch
+sem rm nosuch
+sem config --deadlock maybe
+sem trace sideways
+sem nonsense
+sem
+# --- a mutex can only be unlocked by its owner, not from the prompt -------------
+sem create -m lockme
+sem post lockme
+# --- a semaphore cannot be removed while a process sleeps on it ------------------
+sem create z 0
+$DEMOS/counter Z 1 --seg zz --sem z &
+sleep 0.2
+sem rm z
+sem clients
+sched ps
+sem post z
+sleep 0.2
+sem rm z
+# --- a process killed while it waits leaves the queue ----------------------------
+sem create q 0
+$DEMOS/counter W1 1 --seg zz --sem q & $DEMOS/counter W2 1 --seg zz --sem q & $DEMOS/counter W3 1 --seg zz --sem q &
+sleep 0.3
+sem
+kill %2
+sleep 0.2
+sem
+sem post q
+sem post q
+sleep 0.3
+jobs
+sem
+# --- a process killed while it HOLDS a mutex: the shell releases it (robust mutex)
+sem trace on
+$DEMOS/mktest hold rm1 5000 & $DEMOS/mktest lock rm1 &
+sleep 0.3
+sem
+kill -9 %1
+sleep 0.3
+sem trace off
+jobs
+sem
+# --- FIFO wake-up order, with 8 sleepers ------------------------------------------
+$DEMOS/mktest fifo 8
+# --- many processes contend for one mutex: the count is still exact --------------
+$DEMOS/counter --reset many
+$DEMOS/counter c1 1000 --seg many --lock mm -w 20 & $DEMOS/counter c2 1000 --seg many --lock mm -w 20 & $DEMOS/counter c3 1000 --seg many --lock mm -w 20 & $DEMOS/counter c4 1000 --seg many --lock mm -w 20 & $DEMOS/counter c5 1000 --seg many --lock mm -w 20 & $DEMOS/counter c6 1000 --seg many --lock mm -w 20 & $DEMOS/counter c7 1000 --seg many --lock mm -w 20 & $DEMOS/counter c8 1000 --seg many --lock mm -w 20 &
+sleep 3
+$DEMOS/counter --show many
+sem
+# --- a semaphore nobody will post: the shell reports the stall; it is fixed from the prompt
+sem create never 0
+$DEMOS/counter N1 1 --seg zz --sem never & $DEMOS/counter N2 1 --seg zz --sem never &
+sleep 1.5
+sem post never
+sem post never
+sleep 0.3
+jobs
+sem reset
+sem
+echo "shell alive after every synchronization error, status=$?"
+exit 0

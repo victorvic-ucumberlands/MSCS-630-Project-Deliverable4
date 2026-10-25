@@ -1,0 +1,68 @@
+# ===== DEMO 20: a race condition on shared memory, and mutual exclusion =====
+# $DEMOS/counter NAME N adds 1 to a shared counter N times (v = counter; counter = v+1).
+sem help
+# ---------------------------------------------------------------------------
+# 1. Two processes, no synchronization.  When one is preempted between its
+#    read and its write, the other's increments meanwhile are overwritten:
+#    the total is LESS than 2 x 20000 (lost updates).
+# ---------------------------------------------------------------------------
+$DEMOS/counter --reset c1
+$DEMOS/counter A 20000 --seg c1 & $DEMOS/counter B 20000 --seg c1 &
+sleep 6
+$DEMOS/counter --show c1
+# ---------------------------------------------------------------------------
+# 2. The same with a mutex around the read-modify-write: exactly 10000.
+# ---------------------------------------------------------------------------
+#    First a close look: 3 increments each, 4 ms of work inside the critical
+#    section and a 5 ms time slice, so a process is often preempted while it
+#    holds the mutex - and the other one then sleeps until it is unlocked.
+$DEMOS/counter --reset c1
+sched policy rr -q 5
+sem trace on
+$DEMOS/counter A 3 --seg c1 --lock m1 -w 4000 & $DEMOS/counter B 3 --seg c1 --lock m1 -w 4000 &
+sleep 0.5
+sem trace off
+sched policy rr -q 100
+$DEMOS/counter --show c1
+$DEMOS/counter --reset c1
+$DEMOS/counter A 5000 --seg c1 --lock m1 & $DEMOS/counter B 5000 --seg c1 --lock m1 &
+sleep 0.3
+sem
+sched ps
+sleep 3
+$DEMOS/counter --show c1
+sem
+# ---------------------------------------------------------------------------
+# 3. A counting semaphore with value 1 (a binary semaphore) works as well;
+#    three processes this time.
+# ---------------------------------------------------------------------------
+$DEMOS/counter --reset c2
+$DEMOS/counter A 2000 --seg c2 --sem s2 & $DEMOS/counter B 2000 --seg c2 --sem s2 & $DEMOS/counter C 2000 --seg c2 --sem s2 &
+sleep 3
+$DEMOS/counter --show c2
+# ---------------------------------------------------------------------------
+# 4. The shared resource can be a real file: the same race, the same cure.
+# ---------------------------------------------------------------------------
+$DEMOS/counter --reset-file count.bin
+$DEMOS/counter A 3000 --file count.bin -w 50 & $DEMOS/counter B 3000 --file count.bin -w 50 &
+sleep 1
+$DEMOS/counter --show-file count.bin
+$DEMOS/counter --reset-file count.bin
+$DEMOS/counter A 3000 --file count.bin -w 50 --lock fm & $DEMOS/counter B 3000 --file count.bin -w 50 --lock fm &
+sleep 3
+$DEMOS/counter --show-file count.bin
+rm count.bin
+# ---------------------------------------------------------------------------
+# 5. A process waiting on a semaphore really sleeps: the scheduler shows it
+#    BLOCKED (and why), and a V() from the prompt wakes it.
+# ---------------------------------------------------------------------------
+sem create gate 0
+$DEMOS/counter W 3 --seg c3 --sem gate &
+sleep 0.2
+sched ps
+sem
+sem post gate
+sleep 0.3
+jobs
+$DEMOS/counter --show c3
+exit 0

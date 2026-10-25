@@ -1,0 +1,36 @@
+# ===== DEMO 05: nesting, rapid fork/exec, stopped-job exit guard, cleanup =====
+# --- the shell can run itself (nested shell, own job table, own exit code) ---
+echo 'echo hello from the nested shell, pid=$$' > nested.msh
+echo 'sleep 0.2 &' >> nested.msh
+echo 'jobs' >> nested.msh
+echo 'exit 7' >> nested.msh
+$MYSHELL nested.msh
+echo nested shell returned $?
+rm nested.msh
+# --- rapid-fire fork/exec of short commands ---
+true
+true
+true
+true
+true
+true
+true
+true
+true
+true
+false
+echo last of ten quick children returned $?
+# --- exit with a stopped job: first exit refused, second forces ---
+sleep 4242 &
+sleep 4243 &
+sleep 4244 &
+kill -STOP %2
+jobs
+exit
+echo shell is still running after the refused exit
+jobs
+# any other command in between resets the guard, so this exit is refused again...
+exit 5
+# ...but two exits in a row force the shell to quit (jobs are cleaned up)
+exit 5
+echo THIS LINE MUST NEVER PRINT

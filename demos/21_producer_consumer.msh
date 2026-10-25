@@ -1,0 +1,81 @@
+# ===== DEMO 21: the bounded-buffer Producer-Consumer problem with real processes =====
+# $DEMOS/pc: the buffer is a shared segment of the shell; semaphores BUF.empty
+# (free slots), BUF.full (filled slots) and the mutex BUF.mutex synchronize it.
+# ---------------------------------------------------------------------------
+# 1. One producer, one consumer, a 4-slot buffer, every step printed.  The
+#    producer is faster: when the buffer is full it sleeps on 'empty'.
+# ---------------------------------------------------------------------------
+$DEMOS/pc init 4
+sem
+$DEMOS/pc producer 1 8 -v & $DEMOS/pc consumer 1 8 -v -t 40 &
+sleep 0.15
+sched ps
+sem
+$DEMOS/pc show
+sleep 0.6
+jobs
+$DEMOS/pc check pc.log 1 8
+rm pc.log
+# ---------------------------------------------------------------------------
+# 2. Two producers and two consumers, 400 items each way through 8 slots.
+#    Every item is consumed exactly once, in order.
+# ---------------------------------------------------------------------------
+$DEMOS/pc init 8
+$DEMOS/pc producer 1 400 & $DEMOS/pc producer 2 400 & $DEMOS/pc consumer 1 400 & $DEMOS/pc consumer 2 400 &
+sleep 0.3
+sem
+sleep 4
+jobs
+$DEMOS/pc check pc.log 2 400
+sem
+rm pc.log
+# ---------------------------------------------------------------------------
+# 3. The same WITHOUT synchronization: busy-waiting on `count` and unprotected
+#    updates of the indices.  To make the race as likely as possible the
+#    kernel schedules the processes here (sched live off), so on a machine with
+#    several CPUs they really run at the same time.  Items are lost, duplicated
+#    or read from empty slots.  Then the synchronized version under the same
+#    conditions: still exactly once, in order.
+# ---------------------------------------------------------------------------
+$DEMOS/pc init 8
+sched live off
+$DEMOS/pc producer 1 400 --nosync & $DEMOS/pc producer 2 400 --nosync & $DEMOS/pc consumer 1 400 --nosync & $DEMOS/pc consumer 2 400 --nosync &
+sleep 4
+jobs
+$DEMOS/pc check pc.log 2 400
+rm pc.log
+$DEMOS/pc init 8
+$DEMOS/pc producer 1 400 & $DEMOS/pc producer 2 400 & $DEMOS/pc consumer 1 400 & $DEMOS/pc consumer 2 400 &
+sleep 2
+jobs
+$DEMOS/pc check pc.log 2 400
+rm pc.log
+sched live on
+# ---------------------------------------------------------------------------
+# 4. Deadlock from the wrong order: locking the mutex BEFORE waiting on
+#    empty/full.  The producer fills the buffer, then sleeps on 'empty' while
+#    holding the mutex the consumer needs.  The shell reports the stall.
+# ---------------------------------------------------------------------------
+$DEMOS/pc init 2
+$DEMOS/pc producer 1 10 --bad-order & $DEMOS/pc consumer 1 10 --bad-order -t 50 &
+sleep 2
+sem
+sched ps
+kill %1 %2
+sleep 0.3
+sem
+rm -f pc.log
+# ---------------------------------------------------------------------------
+# 5. Extremes: a buffer of one slot, and many producers on one consumer.
+# ---------------------------------------------------------------------------
+$DEMOS/pc init 1
+$DEMOS/pc producer 1 100 & $DEMOS/pc consumer 1 100 &
+sleep 2
+$DEMOS/pc check pc.log 1 100
+rm pc.log
+$DEMOS/pc init 4 -n many
+$DEMOS/pc producer 1 50 -n many & $DEMOS/pc producer 2 50 -n many & $DEMOS/pc producer 3 50 -n many & $DEMOS/pc producer 4 50 -n many & $DEMOS/pc consumer 1 200 -n many &
+sleep 3
+jobs
+$DEMOS/pc check pc.log 4 50
+exit 0

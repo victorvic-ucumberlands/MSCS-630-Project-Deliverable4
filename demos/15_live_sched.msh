@@ -1,0 +1,115 @@
+# ===== DEMO 15: every command the shell starts is scheduled by the shell =====
+# Commands typed normally (no `sched` prefix) are real processes that the
+# shell schedules with the default parameters:
+#   Round-Robin, 100 ms time slice, priority 10, block detection on.
+sched policy
+sched default
+# ---------------------------------------------------------------------------
+# 1. Two ordinary background commands share the CPU in 100 ms slices.
+#    `sched ps`: one is RUN, the other READY and stopped in the kernel (T).
+# ---------------------------------------------------------------------------
+$BURN A 300 100 &
+$BURN B 300 100 &
+sched ps
+sleep 1
+jobs -a
+# ---------------------------------------------------------------------------
+# 2. The scheduling decisions as they happen (sched trace).
+# ---------------------------------------------------------------------------
+sched trace on
+$BURN C 200 100 &
+$BURN D 200 100 &
+sleep 0.6
+sched trace off
+# ---------------------------------------------------------------------------
+# 3. A foreground command competes for the CPU like any other: it waits its
+#    turn and shares the CPU with the background job, slice by slice.
+# ---------------------------------------------------------------------------
+$BURN bgjob 400 200 &
+$BURN fgjob 200 100
+jobs -a
+sleep 0.3
+# ---------------------------------------------------------------------------
+# 4. A process that sleeps does not keep the CPU (block detection): `busy`
+#    finishes in about its own 300 ms although `sleep 1` started first.
+# ---------------------------------------------------------------------------
+sched trace on
+sleep 1 &
+$BURN busy 300 100 &
+sched ps
+sleep 1.2
+sched trace off
+jobs -a
+# ---------------------------------------------------------------------------
+# 5. Priorities.  `prio N COMMAND` runs a command with priority N; under the
+#    priority policy an urgent command preempts the running one at once.
+# ---------------------------------------------------------------------------
+sched policy priority
+sched trace on
+$BURN low 400 100 &
+prio 1 $BURN urgent 100 50 &
+sleep 0.7
+sched trace off
+jobs -a
+# ---------------------------------------------------------------------------
+# 6. Renice: `prio N %JOB` changes the priority of a running job.  Making the
+#    waiting job more urgent preempts the one holding the CPU.
+# ---------------------------------------------------------------------------
+sched trace on
+$BURN first 600 200 &
+$BURN second 300 100 &
+sched ps
+prio 2 %2
+sched ps
+sleep 1.1
+sched trace off
+# ---------------------------------------------------------------------------
+# 7. Job control goes through the scheduler: kill -STOP takes a job out of
+#    the ready queue, bg puts it back, kill delivers a signal at once.
+# ---------------------------------------------------------------------------
+sched policy rr
+$BURN s1 5000 1000 &
+$BURN s2 5000 1000 &
+kill -STOP %1
+sched ps
+bg %1
+sched ps
+kill %1 %2
+jobs
+# ---------------------------------------------------------------------------
+# 8. The default priority applies to commands started from then on.
+# ---------------------------------------------------------------------------
+sched default 20
+$BURN later 50 50 &
+sched ps
+sleep 0.3
+sched default 10
+# ---------------------------------------------------------------------------
+# 9. Live scheduling off: the kernel runs both jobs at once (on a machine with
+#    two or more CPUs both show R).  Switching it back on adopts the running
+#    jobs: one RUN, one READY.
+# ---------------------------------------------------------------------------
+sched live off
+$BURN X 600 600 &
+$BURN Y 600 600 &
+ps -o pid,stat,args --ppid $$ --no-headers
+sched live on
+sched ps
+sleep 1.4
+# ---------------------------------------------------------------------------
+# 10. Errors
+# ---------------------------------------------------------------------------
+prio
+prio x ls
+prio 100 ls
+prio 5
+prio 5 %9
+prio 5 %1 extra
+sched policy bogus
+sched policy priority -q 10
+sched policy rr --no-preempt
+sched default 100
+sched default abc
+sched live maybe
+sched trace sideways
+exit 0

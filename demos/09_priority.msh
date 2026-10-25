@@ -1,0 +1,78 @@
+# ===== DEMO 09: Priority-based scheduling of REAL processes =====
+# Priorities are 0..99 and a LOWER number means a MORE urgent process.
+# The ready queue is a binary heap; equal priorities are served
+# first-come-first-served; a more urgent arrival preempts the running process.
+# ---------------------------------------------------------------------------
+# 1. The heap always hands over the most urgent process.  lowA and lowB share a
+#    priority, so they run in arrival order (FCFS tie-break).
+# ---------------------------------------------------------------------------
+sched add -p 9 $BURN lowA 100 50
+sched add -p 1 $BURN highA 100 50
+sched add -p 5 $BURN midA 100 50
+sched add -p 9 $BURN lowB 100 50
+sched list
+sched run priority
+# ---------------------------------------------------------------------------
+# 2. Preemption.  `low` is running when `mid` is created at 150 ms and `high` at
+#    300 ms; each one takes the CPU away from the running process immediately
+#    (SIGSTOP to the victim, SIGCONT to the newcomer).
+# ---------------------------------------------------------------------------
+sched clear
+sched add -p 8 $BURN low 400 100
+sched add -p 5 -t 150 $BURN mid 200 100
+sched add -p 1 -t 300 $BURN high 150 50
+sched run priority
+# the same three processes with preemption switched off: a running process is
+# never interrupted, so `low` keeps the CPU until it finishes
+sched run priority --no-preempt --quiet
+# ---------------------------------------------------------------------------
+# 3. An arrival with EQUAL priority does not preempt: `second` waits for `first`.
+# ---------------------------------------------------------------------------
+sched clear
+sched add -p 3 $BURN first 250 250
+sched add -p 3 -t 100 $BURN second 100 100
+sched run priority
+# ---------------------------------------------------------------------------
+# 4. A chain of preemptions, each arrival more urgent than the one before.
+# ---------------------------------------------------------------------------
+sched clear
+sched add -p 9 $BURN p9 300 100
+sched add -p 6 -t 100 $BURN p6 200 100
+sched add -p 3 -t 200 $BURN p3 150 50
+sched add -p 0 -t 250 $BURN p0 100 50
+sched run priority
+# ---------------------------------------------------------------------------
+# 5. Starvation: a low-priority process waits behind a stream of urgent work.
+#    This is the known weakness of pure priority scheduling.
+# ---------------------------------------------------------------------------
+sched clear
+sched add -p 50 $BURN victim 50 50
+sched add -p 1 $BURN urgent1 120 120
+sched add -p 1 -t 100 $BURN urgent2 120 120
+sched add -p 1 -t 200 $BURN urgent3 120 120
+sched add -p 1 -t 300 $BURN urgent4 120 120
+sched run priority --quiet
+# ---------------------------------------------------------------------------
+# 6. The boundary priorities 0 and 99.
+# ---------------------------------------------------------------------------
+sched clear
+sched add -p 99 $BURN last 60 60
+sched add -p 0 $BURN first 60 60
+sched run priority --quiet
+# ---------------------------------------------------------------------------
+# 7. Verbose mode: why each dispatch was made, plus the kernel's own view of
+#    every process (T = stopped in the ready queue, R = holding the CPU).
+# ---------------------------------------------------------------------------
+sched clear
+sched add -p 8 $BURN slow 200 100
+sched add -p 1 -t 100 $BURN quick 80 40
+sched run priority -v
+# ---------------------------------------------------------------------------
+# 8. Priority scheduling of ordinary Linux commands.
+# ---------------------------------------------------------------------------
+sched clear
+sched add -p 7 md5sum scratch.bin
+sched add -p 2 wc -l scratch.bin
+sched add -p 4 ls
+sched run priority --quiet
+exit 0

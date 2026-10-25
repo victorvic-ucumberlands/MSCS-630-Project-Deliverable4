@@ -1,0 +1,82 @@
+# ===== DEMO 17: paging - allocation, demand paging, page faults, overflow, deallocation =====
+# $DEMOS/memproc NAME PAGES REFS allocates PAGES pages from the shell and makes the
+# memory references REFS; every load/store goes through the shell's page table.
+mem help
+# ---------------------------------------------------------------------------
+# 1. The physical memory: 4 frames of 4 KB, 16 pages of swap.
+# ---------------------------------------------------------------------------
+mem config -f 4 -p 4096 -s 16 -d 0 -a lru
+mem
+# ---------------------------------------------------------------------------
+# 2. Allocation and demand paging.  A allocates 3 pages: nothing is loaded yet.
+#    The first touch of each page is a page fault (minor: zero-filled).  While A
+#    holds its memory (--hold), the frame table and A's page table show it.
+#    When A exits, the shell frees its pages and frames (deallocation).
+# ---------------------------------------------------------------------------
+mem trace on
+$DEMOS/memproc A 3 0w,1w,2,0,1 -v --hold 400 &
+sleep 0.2
+mem
+mem pt %1
+sleep 0.4
+mem trace off
+mem
+# ---------------------------------------------------------------------------
+# 3. Memory overflow: B needs 6 pages but there are only 4 frames.  When the
+#    frames are full, the replacement policy (LRU) picks a victim; dirty victims
+#    are written to swap and read back later (MAJOR faults).  Every value read
+#    back is checked against what was written (data check).
+# ---------------------------------------------------------------------------
+mem trace on
+$DEMOS/memproc B 6 0w,1w,2w,3w,4w,5w,0,1,2,3 -v
+mem trace off
+mem ps -a
+# ---------------------------------------------------------------------------
+# 4. Two processes share the 4 frames (global replacement): C's pages are
+#    evicted by D and vice versa; each process's own counters are kept.
+# ---------------------------------------------------------------------------
+$DEMOS/memproc C 3 loop:3:20 -W -s 2 & $DEMOS/memproc D 3 loop:3:20 -W -s 2 &
+sleep 0.05
+mem
+sleep 0.5
+mem ps -a
+# ---------------------------------------------------------------------------
+# 5. Explicit deallocation: E frees its pages before it exits.
+# ---------------------------------------------------------------------------
+mem trace on
+$DEMOS/memproc E 2 0w,1w --free
+mem trace off
+# ---------------------------------------------------------------------------
+# 6. Limits: RAM + swap = 20 pages, so 21 pages are refused (ENOMEM) - no
+#    process is ever killed for lack of memory.  An access to a page that was
+#    never allocated is a segmentation fault (SIGSEGV from the shell).
+# ---------------------------------------------------------------------------
+$DEMOS/memproc huge 21 0
+echo status=$?
+$DEMOS/memproc ok 20 loop:20:1
+echo status=$?
+$DEMOS/memproc bad 2 0,1,5
+echo status=$?
+# ---------------------------------------------------------------------------
+# 7. Page faults block the process: with 20 ms of swap I/O per page, a process
+#    that faults sleeps and the CPU scheduler runs someone else meanwhile.
+# ---------------------------------------------------------------------------
+mem config -d 20
+sched trace on
+$DEMOS/memproc slow 6 loop:6:2 -W & $BURN busy 200 100 &
+sleep 1
+sched trace off
+mem config -d 0
+# ---------------------------------------------------------------------------
+# 8. Shared memory: two processes map the same segment.  Its page is in ONE
+#    frame however many page tables point to it; a mutex protects the counter.
+# ---------------------------------------------------------------------------
+$DEMOS/counter --reset shared1
+$DEMOS/counter X 2000 --seg shared1 --lock shared1.m & $DEMOS/counter Y 2000 --seg shared1 --lock shared1.m &
+sleep 0.1
+mem
+mem shm
+sleep 2
+mem peek shared1 0
+mem stats
+exit 0
