@@ -1,0 +1,18 @@
+# ===== D4 Figure 1: pipes - two stages and multi-stage chains =====
+# (any user; e.g. log in as alice, then: source $MYSHELL_DIR/figures/d4/fig01_pipes.msh)
+cd
+touch todo.txt photo.png report.pdf
+# --- two stages: list the files, keep those whose name contains "txt" ---
+ls
+ls | grep txt
+cd $MYSHELL_FS
+# --- three stages: the error lines of the log, sorted ---
+cat logs/app.log | grep error
+cat logs/app.log | grep error | sort
+# --- six stages: how often each error message occurs, most frequent first ---
+cat logs/app.log | grep error | cut -c18- | sort | uniq -c | sort -rn
+# --- built-in and external commands mixed; < feeds the first stage, > takes the last ---
+echo "hello pipes" | tr a-z A-Z
+ls -l system | grep -v total | wc -l
+grep error < logs/app.log | sort -k4 > $HOME/errors_sorted.txt
+cat $HOME/errors_sorted.txt

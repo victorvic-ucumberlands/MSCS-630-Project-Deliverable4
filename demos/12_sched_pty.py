@@ -20,7 +20,7 @@ import time
 
 SHELL = sys.argv[1] if len(sys.argv) > 1 else "./myshell"
 BURN = os.path.abspath(sys.argv[2] if len(sys.argv) > 2 else "./demos/cpuburn")
-PROMPT = r"myshell:[^\r\n]*\$ $"
+PROMPT = r"myshell:[^\r\n]*[$#] $"
 
 pid, fd = pty.fork()
 if pid == 0:

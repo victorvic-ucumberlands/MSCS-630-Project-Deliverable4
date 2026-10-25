@@ -1,0 +1,19 @@
+# ===== Figure 10: resource ordering, the waiter, and deadlock avoidance by the shell =====
+# (Deliverable 4: log in as admin first; the script runs from the shell's own directory)
+cd $MYSHELL_DIR
+sem reset
+# --- ordered: the lower-numbered fork first ---
+./demos/philo 0 5 3 --ordered --pause 100 & ./demos/philo 1 5 3 --ordered --pause 100 & ./demos/philo 2 5 3 --ordered --pause 100 & ./demos/philo 3 5 3 --ordered --pause 100 & ./demos/philo 4 5 3 --ordered --pause 100 &
+sleep 4
+sem deadlock
+# --- waiter: a semaphore 'room' admits at most 4 philosophers ---
+sem reset
+./demos/philo 0 5 3 --waiter --pause 100 & ./demos/philo 1 5 3 --waiter --pause 100 & ./demos/philo 2 5 3 --waiter --pause 100 & ./demos/philo 3 5 3 --waiter --pause 100 & ./demos/philo 4 5 3 --waiter --pause 100 &
+sleep 0.3
+sem
+sleep 4
+# --- naive again, but the shell refuses the lock that would close the cycle ---
+sem config --deadlock fail
+./demos/philo 0 5 2 --naive --pause 100 & ./demos/philo 1 5 2 --naive --pause 100 & ./demos/philo 2 5 2 --naive --pause 100 & ./demos/philo 3 5 2 --naive --pause 100 & ./demos/philo 4 5 2 --naive --pause 100 &
+sleep 4
+sem config --deadlock report

@@ -1,0 +1,37 @@
+# ===== DEMO 29: a second standard user (bob): sharing, the sticky bit, chmod, jobs =====
+# run-as: bob
+cd $MYSHELL_FS/shared
+ls -l
+# --- group users may write team.txt (rw-rw-r--) ---
+echo "bob: reviewed the pipeline" >> team.txt
+cat team.txt
+# --- the sticky bit: bob may create files here but not delete alice's ---
+touch from_bob.txt
+rm from_bob.txt
+rm team.txt
+mv team.txt mine.txt
+access team.txt
+# --- his own script is not executable until he sets the x bit ---
+cd
+ls -l
+./report.sh
+chmod u+x report.sh
+ls -l report.sh
+./report.sh
+chmod o+r ../alice/notes.txt
+# --- bob's jobs belong to bob; switching to alice, she cannot touch them ---
+sleep 30 &
+jobs
+login alice
+alice123
+whoami
+jobs
+kill %1
+fg %1
+login bob
+bob12345
+jobs
+kill %1
+sleep 0.3
+jobs
+exit 0

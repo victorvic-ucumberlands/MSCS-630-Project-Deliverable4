@@ -1,0 +1,21 @@
+# ===== D4 Figure 10: the guest role (read-only) and the admin role =====
+# (log in as guest / guest123, then: source $MYSHELL_DIR/figures/d4/fig10_guest_admin.msh)
+id
+cd $MYSHELL_FS
+# --- ALLOWED: a guest may read and run ---
+cat shared/readme.txt
+cat logs/app.log | grep -c info
+bin/hello.sh
+# --- DENIED: a guest may never create, write or delete, not even in his own home ---
+touch home/guest/note.txt
+echo "guest was here" >> shared/team.txt
+rm shared/readme.txt
+# --- now the administrator: type admin123 ---
+login admin
+cd $MYSHELL_FS
+cat system/secret.key
+echo "log_level=debug" >> system/config
+tail -2 system/config
+# --- even admin needs an x bit to run a file (as root does) ---
+home/bob/report.sh
+access home/bob/report.sh

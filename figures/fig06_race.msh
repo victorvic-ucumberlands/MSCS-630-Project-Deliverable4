@@ -1,0 +1,24 @@
+# ===== Figure 6: a lost-update race on shared memory, and the cure (a mutex) =====
+# (Deliverable 4: log in as admin first; the script runs from the shell's own directory)
+cd $MYSHELL_DIR
+# --- two processes, NO synchronization: the total ends below 2 x 20000 = 40000 ---
+./demos/counter --reset c1
+./demos/counter A 20000 --seg c1 & ./demos/counter B 20000 --seg c1 &
+sleep 6
+./demos/counter --show c1
+# --- a close look with a mutex: 5 ms slices, 4 ms of work inside the critical section ---
+./demos/counter --reset c1
+sched policy rr -q 5
+sem trace on
+./demos/counter A 3 --seg c1 --lock m1 -w 4000 & ./demos/counter B 3 --seg c1 --lock m1 -w 4000 &
+sleep 0.5
+sem trace off
+sched policy rr -q 100
+# --- the full run with the mutex: exactly 2 x 5000 = 10000 ---
+./demos/counter --reset c1
+./demos/counter A 5000 --seg c1 --lock m1 & ./demos/counter B 5000 --seg c1 --lock m1 &
+sleep 0.3
+sched ps
+sleep 3
+./demos/counter --show c1
+sem

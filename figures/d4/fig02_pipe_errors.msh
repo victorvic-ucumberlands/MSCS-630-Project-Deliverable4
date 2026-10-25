@@ -1,0 +1,26 @@
+# ===== D4 Figure 2: errors in a pipeline =====
+# (log in as alice, then: source $MYSHELL_DIR/figures/d4/fig02_pipe_errors.msh)
+cd
+# --- the status of a pipeline is the status of its LAST stage ---
+true | false
+echo status=$?
+false | true
+echo status=$?
+# --- a missing program: its stage fails (127), the others still run ---
+nosuchprogram | wc -l
+echo status=$?
+echo hi | nosuchprogram
+echo status=$?
+# --- an early reader: head exits after 3 lines, the writer is stopped by SIGPIPE ---
+yes | head -3
+seq 1 200000 | sort -rn | head -3
+# --- a stage that is denied access fails on its own; the pipeline does not leak the data ---
+cat $MYSHELL_FS/system/secret.key | wc -c
+echo status=$?
+# --- a redirection the user may not make: nothing runs at all ---
+cat $MYSHELL_FS/logs/app.log | grep error > $MYSHELL_FS/system/errors.txt
+echo status=$?
+# --- syntax errors are found before anything runs ---
+echo a | | echo b
+echo a |
+| echo b

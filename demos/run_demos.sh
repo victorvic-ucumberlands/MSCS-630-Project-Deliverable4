@@ -12,11 +12,22 @@
 #                                           other logs, and re-evaluate every check
 set -u
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SH="$ROOT/myshell"
+SH_REAL="$ROOT/myshell"
 OUT="$ROOT/evidence"
 DEMOS="$ROOT/demos"
 
-[ -x "$SH" ] || { echo "build first: make" >&2; exit 1; }
+[ -x "$SH_REAL" ] || { echo "build first: make" >&2; exit 1; }
+# Deliverable 4: every shell has to log in.  The demos and tests run as admin
+# through a small wrapper (-u admin, with the demo password), against their
+# own throw-away user database and file tree; nothing touches ./.myshell or ./fs.
+TESTDB="$(mktemp -d)"
+export MYSHELL_HOME="$TESTDB/.myshell" MYSHELL_FS="$TESTDB/fs"
+"$SH_REAL" --setup-demo >/dev/null || { echo "demo setup failed" >&2; exit 1; }
+mkdir -p "$ROOT/build"
+SH="$ROOT/build/myshell-admin"
+printf '#!/bin/sh\nMYSHELL_PASSWORD=admin123 exec "%s" -u admin "$@"\n' "$SH_REAL" > "$SH"
+chmod +x "$SH"
+password_of() { case "$1" in admin) echo admin123;; alice) echo alice123;; bob) echo bob12345;; guest) echo guest123;; esac; }
 [ -x "$ROOT/demos/cpuburn" ] || { echo "build first: make (demos/cpuburn is missing)" >&2; exit 1; }
 ONLY=("$@")
 if [ ${#ONLY[@]} -eq 0 ]; then rm -rf "$OUT"; fi
@@ -73,7 +84,12 @@ run_demo() {                                   # run_demo <script>
     echo "### scratch dir: $work   shell: $SH"
     echo
   } > "$OUT/$name.log"
-  ( cd "$work" && MYSHELL="$SH" BURN="$ROOT/demos/cpuburn" DEMOS="$ROOT/demos" timeout 300 "$SH" -e "$script" </dev/null >>"$OUT/$name.log" 2>&1
+  # "# run-as: USER" in a script runs it as that user (default admin); every
+  # demo gets a fresh user database and file tree in its scratch directory
+  local user; user="$(sed -n 's/^# run-as: *\([a-z]*\).*/\1/p' "$script" | head -1)"; user="${user:-admin}"
+  ( cd "$work" && export MYSHELL_HOME="$work/.myshell" MYSHELL_FS="$work/fs" && "$SH_REAL" --setup-demo >/dev/null &&
+    MYSHELL="$SH" BURN="$ROOT/demos/cpuburn" DEMOS="$ROOT/demos" MYSHELL_PASSWORD="$(password_of "$user")" \
+    timeout 300 "$SH_REAL" -u "$user" -e "$script" </dev/null >>"$OUT/$name.log" 2>&1
     rc=$?; echo >>"$OUT/$name.log"; echo "### myshell exit code: $rc" >>"$OUT/$name.log" )
   rm -rf "$work"
   echo "ran $name -> evidence/$name.log"
@@ -105,6 +121,12 @@ fi
 if want 25_memory_verification; then
   python3 "$ROOT/tests/verify_memory.py" "$SH" "$ROOT/demos" > "$OUT/25_memory_verification.log" 2>&1
   echo "ran memory verification -> evidence/25_memory_verification.log"
+fi
+
+# ---- Deliverable 4: login on a real terminal (its own user database) ---------
+if want 27_login_pty; then
+  python3 "$DEMOS/27_login_pty.py" "$SH_REAL" > "$OUT/27_login_pty.log" 2>&1
+  echo "ran 27_login_pty -> evidence/27_login_pty.log"
 fi
 
 # ---- automatic checks -------------------------------------------------------
@@ -168,7 +190,9 @@ count_ge() {                                   # count_ge <log> <description> <f
   check 03_errors "exit non-numeric does not exit"        "numeric argument required"
   check 03_errors "shell alive after bad exit"            "still alive after bad exit args"
   check 03_errors "unterminated quote"                    "unterminated double quote"
-  check 03_errors "pipe rejected"                         "pipes ('|') are not supported yet"
+  check 03_errors "empty pipeline stage rejected"         "syntax error: missing command before '|'"
+  check 03_errors "pipe with no last command"            "syntax error: missing command after '|'"
+  check 03_errors "pipe with no first command"           "syntax error near unexpected token '|'"
   check 03_errors "syntax error near ;"                   "syntax error near unexpected token ';'"
   check 03_errors "missing redirect target"               "expected a file name after redirection operator"
   check 03_errors "stdout restored after failed redirect" "stdout is still the terminal"
@@ -266,8 +290,8 @@ count_ge() {                                   # count_ge <log> <description> <f
   check_re 15_live_sched "a command started after that gets priority 20"         " 20  (RUN|READY) "
   check 15_live_sched "live scheduling can be switched off"                      "live scheduling OFF: the kernel schedules the shell's jobs"
   if [ "$(nproc)" -ge 2 ]; then
-    check_re 15_live_sched "with it off, the kernel runs two jobs at once (both R)" "^ +[0-9]+ R +.*cpuburn X"
-    check_re 15_live_sched "...the second one too"                                "^ +[0-9]+ R +.*cpuburn Y"
+    check_re 15_live_sched "with it off, the kernel runs two jobs at once (both R)" "^ *[0-9]+ R +.*cpuburn X"
+    check_re 15_live_sched "...the second one too"                                "^ *[0-9]+ R +.*cpuburn Y"
   fi
   check 15_live_sched "prio rejects a bad priority"                              "prio: priority must be an integer from 0 to 99, got 'x'"
   check 15_live_sched "prio needs a command"                                     "prio: usage: prio N COMMAND"
@@ -353,6 +377,72 @@ count_ge() {                                   # count_ge <log> <description> <f
   absent_sub 24_memory_perf "live equals offline"                      "DIFFERENT"
   check 25_memory_verification "all memory/sync properties hold"       "properties hold"
   absent_sub 25_memory_verification "no failed property"               "FAIL  "
+  # ---- Deliverable 4: pipes ----
+  check 26_pipes "two-stage pipe: ls | grep"                           "team.txt"
+  check_re 26_pipes "three-stage pipe: cat | grep | sort"              "08:02 error disk quota exceeded on /home$"
+  check_re 26_pipes "six-stage chain ends in uniq -c | sort -rn"       "^ +2 error authentication failed for bob$"
+  check 26_pipes "a missing last stage gives the pipeline 127"        "status=127"
+  check_re 26_pipes "true | false has status 1"                        "^status=1$"
+  check 26_pipes "a large sort through head"                           "199998"
+  count_ge 26_pipes "yes | head -3 ends (SIGPIPE stops yes)"           "y" 3
+  check_re 26_pipes "a background pipeline is one job"                 "^\[1\] [0-9]+$"
+  check 26_pipes "the scheduler sees the pipeline as one job"          "sleep 1 | sleep 1 | cat"
+  check 26_pipes "kill -STOP stops the whole pipeline"                 "Stopped (SIGSTOP)        sleep 30 | cat | cat"
+  check 26_pipes "kill ends the whole pipeline"                        "Terminated               sleep 30 | cat | cat"
+  check 26_pipes "memproc output piped and counted"                    "12"
+  check 26_pipes "syntax error: empty stage"                           "syntax error: missing command before '|'"
+  # ---- Deliverable 4: authentication ----
+  check 27_login_pty "all login checks pass"                           "22 of 22 checks passed"
+  # ---- Deliverable 4: permissions ----
+  check 28_permissions_alice "standard user writes her own file"       "alice: buy milk"
+  check 28_permissions_alice "another user's home is closed"           "ls: ../bob: permission denied"
+  check 28_permissions_alice "system config is readable"               "max_users=16"
+  check 28_permissions_alice "system secret is not readable"           "cat: ../../system/secret.key: permission denied"
+  check 28_permissions_alice "system config is not writable"           "myshell: ../../system/config: permission denied"
+  check 28_permissions_alice "system file cannot be removed"           "rm: ../../system/config: permission denied"
+  check 28_permissions_alice "no new files in system/"                 "touch: ../../system/backdoor: permission denied"
+  check 28_permissions_alice "access explains each decision"           "read    ALLOWED  alice is 'others' for fs/system/config"
+  check 28_permissions_alice "an x-bit program runs"                   "hello from a shared tool, run by alice"
+  check 28_permissions_alice "a program without x for others is refused" "myshell: ../../system/maintenance.sh: permission denied"
+  check 28_permissions_alice "external programs' files are checked"   "grep: ../../system/secret.key: permission denied"
+  check 28_permissions_alice "owner may chmod her file"                "fs/home/alice/notes.txt: -rw-r----- -> -rw-------"
+  check 28_permissions_alice "chmod of a system file refused"          "only the owner of fs/system/config (admin) or admin may change its mode"
+  check 28_permissions_alice "system settings need admin"              "sched policy (a system-wide scheduler setting) requires the admin role"
+  check 28_permissions_alice "raising a priority needs admin"          "only admin may raise a priority"
+  check 28_permissions_alice "the security DB is hidden"               "the security database is reachable only through the user-management commands"
+  check 29_permissions_bob "group write in shared/"                    "bob: reviewed the pipeline"
+  check 29_permissions_bob "sticky bit protects alice's file"          "only the owner of fs/shared/team.txt (alice) may delete or rename it"
+  check 29_permissions_bob "no x bit, no execution"                    "myshell: ./report.sh: permission denied"
+  check 29_permissions_bob "after chmod u+x it runs"                   "bob's weekly report: all systems nominal"
+  check 29_permissions_bob "jobs belong to their owner"                "kill: %1: permission denied: job [1] belongs to bob"
+  check 29_permissions_bob "the owner can control them again"          "Terminated               sleep 30"
+  check 30_permissions_guest "guest reads"                             "shared/ is writable by group users"
+  check 30_permissions_guest "guest cannot create"                     "touch: note.txt: permission denied: role guest is read-only"
+  check 30_permissions_guest "guest cannot append"                     "myshell: team.txt: permission denied: role guest is read-only"
+  check 30_permissions_guest "guest cannot delete"                     "rm: readme.txt: permission denied: role guest is read-only"
+  check 31_admin "admin reads the secret"                              "SECRET-KEY-7f3a-only-for-admin"
+  check 31_admin "admin writes a system file"                          "log_level=debug"
+  check 31_admin "even admin needs an x bit"                           "has no execute bit; even admin cannot run it"
+  check 31_admin "chown and chmod"                                     "fs/system/new.conf: owner admin:admin -> alice:users"
+  check 31_admin "useradd with a role"                                 "user 'dave' added (role guest"
+  check 31_admin "usermod changes the role"                            "user 'dave' now has role standard"
+  check 31_admin "admin cannot delete himself"                         "you cannot delete the account you are logged in with"
+  check 31_admin "the audit log records denials"                       "DENY admin myshell home/bob/report.sh"
+  check 32_integration "pipelines are scheduled jobs"                  "ready queue (service order): [cpuburn|grep]"
+  check 32_integration "page faults counted through a pipe"            "6"
+  check 32_integration "a semaphore belongs to its creator"            "'alice.gate' was created by alice; only its creator or admin may post it"
+  check 32_integration "the creator wakes the waiter"                  "V(alice.gate): woke the first waiter"
+  check 32_integration "producer-consumer correct with a pipe"         "verdict: CORRECT"
+  check 32_integration "redirection inside a pipeline is checked"      "fs/system/errors.txt: permission denied"
+  check 33_security_errors "path tricks reach the same decision"       "cat: ../../system/../system/./secret.key: permission denied"
+  check 33_security_errors "a symlink does not bypass the check"       "cat: link.key: permission denied: alice is 'others' for fs/system/secret.key"
+  check 33_security_errors "removing the link keeps the secret protected" "-rw------- admin    admin"
+  check 33_security_errors "external cp destination is checked"       "/bin/cp: ../../system/copied.txt: permission denied"
+  check 33_security_errors "tee destination is checked"                "tee: ../../system/tee.txt: permission denied"
+  check_re 33_security_errors "the password does not leak to children" "^0$"
+  check 33_security_errors "wrong current password"                    "passwd: authentication failed"
+  check 33_security_errors "weak password refused"                     "passwd: a password needs at least 8 characters"
+  absent_sub 33_security_errors "the secret never appears"             "SECRET-KEY"
   # leftovers: no orphan sleeps from demo 05 may survive the shell
   # match process names exactly (-x) or anchored command lines, so a shell whose
   # command line merely mentions them is not mistaken for a leftover

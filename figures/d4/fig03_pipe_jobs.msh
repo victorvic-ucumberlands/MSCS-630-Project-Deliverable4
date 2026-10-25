@@ -1,0 +1,17 @@
+# ===== D4 Figure 3: a pipeline is one job - one process group, scheduled and signalled as a unit =====
+# (log in as admin, then: source $MYSHELL_DIR/figures/d4/fig03_pipe_jobs.msh)
+cd $MYSHELL_DIR
+sleep 3 | sleep 3 | wc -l &
+jobs
+sched ps
+# --- the leader (a copy of the shell) and its three stages share one process group ---
+ps -o pid,ppid,pgid,stat,args --pid $! --ppid $!
+kill -STOP %1
+ps -o pid,ppid,pgid,stat,args --pid $! --ppid $!
+kill %1
+jobs
+# --- two CPU-bound pipelines time-sliced by the Round-Robin scheduler (100 ms slices) ---
+sched trace on
+./demos/cpuburn A 150 50 | cat & ./demos/cpuburn B 150 50 | cat &
+sleep 0.8
+sched trace off

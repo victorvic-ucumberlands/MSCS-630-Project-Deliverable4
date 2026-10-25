@@ -1,0 +1,58 @@
+# ===== DEMO 28: file permissions as a standard user (alice) =====
+# run-as: alice
+whoami
+id
+cd
+pwd
+# --- her own home: owner rw ---
+ls -l
+cat notes.txt
+echo "alice: buy milk" >> notes.txt
+cat notes.txt
+touch mine.txt
+ls -l mine.txt
+# --- another user's home: 0700, she cannot even pass through it ---
+ls -l ../bob
+cat ../bob/report.sh
+# --- system files: readable config, secret key, not writable ---
+cat ../../system/config
+cat ../../system/secret.key
+echo "max_users=999" >> ../../system/config
+rm ../../system/config
+mv ../../system/config ../../system/config.old
+cp ../../system/secret.key stolen.key
+touch ../../system/backdoor
+# --- the rule behind each decision ---
+access ../../system/config
+access ../../system/secret.key
+access ../bob
+# --- programs: execute permission ---
+../../bin/hello.sh
+../../system/maintenance.sh
+# --- external programs are checked too ---
+grep -c error ../../logs/app.log
+grep key ../../system/secret.key
+wc -l ../bob/report.sh
+# --- the shared directory: group users may write, the sticky bit protects owners ---
+cd ../../shared
+ls -l
+echo "alice: release on Friday" >> team.txt
+touch from_alice.txt
+ls -l
+# --- she owns notes.txt, so she may change its mode; not other people's files ---
+cd
+chmod 600 notes.txt
+ls -l notes.txt
+chmod 777 ../../system/config
+chown alice ../../system/config
+# --- system settings belong to admin ---
+sched policy fifo
+mem config -f 8
+sem config --handoff barge
+prio 1 sleep 0.1
+useradd eve
+audit
+# --- the security database is not reachable at all ---
+cat $MYSHELL_HOME/passwd
+ls $MYSHELL_HOME
+exit 0

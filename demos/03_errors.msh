@@ -86,7 +86,9 @@ echo "unterminated
 echo 'unterminated
 echo trailing\
 echo part-one-should-not-print ; echo "bad
-echo a | echo b
+echo a | | echo b
+echo a |
+| echo b
 echo a && echo b
 echo a || echo b
 ; echo leading semicolon

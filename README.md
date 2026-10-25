@@ -1,11 +1,13 @@
-# myshell - Deliverables 1-3: shell, process management, job control, CPU scheduling, memory, synchronization
+# myshell - Deliverables 1-4: shell, process management, job control, CPU scheduling, memory, synchronization, pipes, security
 
 C++17, Linux. Uses `fork`, `execvp`, `wait4`, `setpgid`, `tcsetpgrp`, `kill`, signals.
 
 ## Build & run
 ```
 make                    # builds ./myshell  (g++ >= 7)
-./myshell               # interactive shell
+./myshell --setup-demo  # Deliverable 4: create the demo users and the managed file tree fs/ (resets them)
+./myshell               # interactive shell: log in first (see "Security" below)
+./myshell -u alice      # log in without the prompt, password from $MYSHELL_PASSWORD (for scripts)
 ./myshell script.msh    # run a script        (-e echoes each line first)
 make demo               # run every demo + test, write evidence/*.log and evidence/SUMMARY.txt
 make sanitize           # optional: ASan+UBSan build (./myshell_asan)
@@ -28,6 +30,9 @@ make sanitize           # optional: ASan+UBSan build (./myshell_asan)
 | `src/memory.{hpp,cpp}` | **Deliverable 3** - paging: frames, page tables, demand paging, FIFO / LRU / Clock replacement, dirty bits, swap with one I/O device, shared segments; `mem sim` replay with OPT |
 | `src/sync.{hpp,cpp}` | **Deliverable 3** - counting semaphores and owned (robust) mutexes, FIFO wait queues or barging, wait-for-graph deadlock detection |
 | `src/mem_builtin.cpp` | **Deliverable 3** - the `mem` and `sem` built-ins |
+| `src/crypto.{hpp,cpp}` | **Deliverable 4** - SHA-256, HMAC-SHA256, PBKDF2 (checked against Python's hashlib), random salts, constant-time compare |
+| `src/security.{hpp,cpp}` | **Deliverable 4** - users, roles, authentication with lock-out, the permission model (owner/group/other rwx + sticky bit) and its checks, the audit log |
+| `src/security_builtin.cpp` | **Deliverable 4** - login logout whoami id users useradd userdel usermod unlock passwd chmod chown access audit cp mv |
 | `demos/memproc.c` `counter.c` `pc.c` `philo.c` `mktest.c` | **Deliverable 3** test programs: paging workload with data check, shared-counter race, producer-consumer, dining philosophers, API edge cases |
 
 ## The job record (`struct Job`, src/job.hpp)
@@ -97,9 +102,24 @@ Screenshot scripts for report figures 6-10: inside `./myshell`, run `source figu
 `tests/verify_memory.py ./myshell ./demos` checks 20 properties, including an independent Python implementation
 of FIFO/LRU/Clock/OPT against both `mem sim` and live processes. `demos/24_memory_perf.py` runs experiments M1-M5, S1-S3.
 
+## Pipes and security (Deliverable 4)
+* **Pipes:** `a | b | c` (up to 16 stages; built-ins and programs may be mixed; `<` applies to the first stage,
+  `>` to the last). A forked copy of the shell leads the pipeline's process group, so the scheduler, `jobs`, `kill`,
+  `fg`/`bg` treat the whole pipeline as one job; its status is the last stage's.
+* **Users** (created by `--setup-demo`): `admin`/`admin123` (role admin, `#` prompt), `alice`/`alice123` and
+  `bob`/`bob12345` (standard), `guest`/`guest123` (read-only). Passwords are stored as PBKDF2-HMAC-SHA256
+  with a random salt in `.myshell/passwd`; 5 failures lock an account; every login and denial goes to `.myshell/audit.log`.
+* **Permissions:** inside `fs/` every file has an owner, a group and rwx bits for owner/group/others (plus the sticky
+  bit); `ls -l`, `chmod`, `chown`, `access FILE` (shows each decision and the rule). The shell checks built-ins,
+  redirections, the programs it runs (x) and their file arguments. System settings (`sched policy`, `mem config`, ...)
+  and user management need admin; jobs and semaphores belong to the user who created them.
+* `$MYSHELL_DIR`, `$MYSHELL_FS`, `$MYSHELL_HOME` are set by the shell for scripts.
+* Screenshot scripts: `figures/d4/figNN_*.msh`, run inside myshell with `source $MYSHELL_DIR/figures/d4/...`
+  (the first comment line says which user to log in as). The Deliverable 3 scripts `figures/fig06..10` need admin.
+
 ## Syntax
-`cmd &` background, `a ; b` sequence, `> >> < 2> 2>>` redirection, `'..'` `".."` `\x` quoting,
-`$VAR ${VAR} $? $$ ~`, `# comment`. Pipes, `&&`, `||` are rejected with a clear message (later deliverable).
+`cmd &` background, `a ; b` sequence, `a | b` pipes, `> >> < 2> 2>>` redirection, `'..'` `".."` `\x` quoting,
+`$VAR ${VAR} $? $$ $! ~`, `# comment`. `&&` and `||` are rejected with a clear message.
 
 ## Demos (evidence)
 `demos/01_builtins.msh` normal use of all built-ins - `02_process_mgmt.msh` fg/bg/stop/continue/kill, process
@@ -112,13 +132,19 @@ queued foreground job, interactive `cat` beside a CPU hog), `08_roundrobin.msh`,
 `10_sched_errors.msh`, `11_sched_limits.msh` (generated, 64 real processes), `12_sched_pty.py`, `13_performance.py`
 (experiments E1-E7). **Deliverable 3:** `17_paging.msh`, `18_replacement.msh`, `19_mem_errors.msh`, `20_race.msh`,
 `21_producer_consumer.msh`, `22_dining.msh`, `23_sync_errors.msh`, `24_memory_perf.py`, `tests/verify_memory.py`.
+**Deliverable 4:** `26_pipes.msh`, `27_login_pty.py` (real terminal: login, wrong passwords, lock-out, useradd, passwd),
+`28_permissions_alice.msh`, `29_permissions_bob.msh`, `30_permissions_guest.msh`, `31_admin.msh`,
+`32_integration.msh`, `33_security_errors.msh` (a `# run-as: USER` line picks the user).
 `run_demos.sh` runs everything and prints PASS/FAIL checks.
 
 For screenshots: run `./myshell` yourself in a terminal and type the commands from the demo scripts
 (or `./myshell -e demos/02_process_mgmt.msh` for a ready-made transcript).
 
 ## Known limitations (documented in the reports)
-* No pipes / globbing / `&&`. `rm` has no `-r`. A Deliverable 1 background job's finish time is stamped when the
+* No globbing / `&&` / `||`; `$?` of a pipeline is the last stage's only (no `PIPESTATUS`). `rm` has no `-r`.
+* The permission model is enforced by the shell (a reference monitor in user space): all accounts share one
+  real Unix uid, so a program that opens files by itself is not stopped by the kernel - only the files named on its
+  command line are checked. Real separation would need one Unix uid per user (or Landlock / namespaces). A Deliverable 1 background job's finish time is stamped when the
   shell *reaps* it (at the next prompt), not at the instant it exits.
 * Job control signals (Ctrl-C/Z) need a terminal; scripts use `kill -STOP/-CONT` instead.
 * Blocking is detected by sampling `/proc` every 5 ms: a process that wakes up can run beside the dispatched one

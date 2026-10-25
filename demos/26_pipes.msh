@@ -1,0 +1,58 @@
+# ===== DEMO 26: pipes - the output of one command is the input of the next =====
+# run-as: admin
+cd $MYSHELL_FS
+# --- 1. two stages: list files, keep those whose name contains "txt" (ls is the shell's own) ---
+ls shared
+ls shared | grep txt
+# --- 2. three and four stages: cat file | grep error | sort (| uniq -c | sort -rn) ---
+cat logs/app.log
+cat logs/app.log | grep error
+cat logs/app.log | grep error | sort
+cat logs/app.log | grep error | cut -c18- | sort | uniq -c | sort -rn
+# --- 3. built-ins and external programs mixed in one pipeline ---
+echo "hello pipes" | tr a-z A-Z
+echo one two three | wc -w
+ls -l system | grep -v total | wc -l
+# --- 4. redirections combine with pipes: < feeds the first stage, > takes the last ---
+grep error < logs/app.log | sort > /tmp/myshell_sorted_errors.txt
+cat /tmp/myshell_sorted_errors.txt
+rm /tmp/myshell_sorted_errors.txt
+# --- 5. exit status is the status of the LAST stage ---
+true | false
+echo status=$?
+false | true
+echo status=$?
+nosuchprogram | wc -l
+echo status=$?
+echo hi | nosuchprogram
+echo status=$?
+# --- 6. lots of data, and an early reader: yes never ends, head stops after 3 lines (SIGPIPE) ---
+seq 1 200000 | sort -rn | head -3
+yes | head -3
+# --- 7. a pipeline is ONE job: one process group, scheduled as a unit ---
+sleep 1 | sleep 1 | cat &
+jobs
+sched ps
+ps -o pid,pgid,stat,args --ppid $$ --no-headers
+sleep 1.3
+jobs
+# --- 8. job control applies to the whole pipeline ---
+sleep 30 | cat | cat &
+kill -STOP %1
+jobs
+kill %1
+sleep 0.3
+jobs
+# --- 9. pipelines with the memory manager and the CPU scheduler ---
+mem config -f 3
+$DEMOS/memproc P 8 7,0,1,2,0,3,0,4,2,3,0,3,2,1,2,0,1,7,0,1 -v | grep -c "PAGE FAULT"
+sched trace on
+$BURN A 150 50 | cat & $BURN B 150 50 | cat &
+sleep 0.8
+sched trace off
+# --- 10. syntax errors: nothing runs ---
+echo a | | echo b
+echo a |
+| echo b
+echo a |& echo b
+exit 0

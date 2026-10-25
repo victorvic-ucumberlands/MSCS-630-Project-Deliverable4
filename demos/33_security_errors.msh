@@ -1,0 +1,52 @@
+# ===== DEMO 33: security - invalid input, adversarial and corner cases =====
+# run-as: alice
+cd
+# --- path tricks: .. and absolute paths end up at the same decision ---
+cat ../../system/../system/./secret.key
+cat $MYSHELL_FS/home/alice/../../system/secret.key
+# --- a symbolic link to the secret: the target is checked, not the link ---
+ln -s ../../system/secret.key link.key
+ls -l link.key
+cat link.key
+cat < link.key
+rm link.key
+# removing the link removes the link only; the secret keeps its protection
+ls -l ../../system/secret.key
+# --- external programs that create files are checked at the destination ---
+/bin/cp notes.txt ../../system/copied.txt
+echo x | tee ../../system/tee.txt
+ls ../../system
+# --- a copy through an external program is checked as well ---
+grep . ../../system/secret.key
+cat ../../system/secret.key | wc -c
+# --- the password never leaks to children ---
+env | grep -c MYSHELL_PASSWORD
+# --- invalid arguments ---
+chmod
+chmod 9999 notes.txt
+chmod u+z notes.txt
+chmod 644 nosuchfile
+chown
+access
+access nosuchfile
+login nosuchuser
+whatever1
+passwd bob
+users extra
+id nobody
+cp
+cp notes.txt
+mv nosuch x
+# --- weak passwords, wrong current password ---
+passwd
+wrongpass1
+passwd
+alice123
+short
+short
+passwd
+alice123
+newpass2026
+different99
+whoami
+exit 0

@@ -1,0 +1,14 @@
+# ===== Figure 7: Producer-Consumer, the producer sleeps when the buffer is full =====
+# (Deliverable 4: log in as admin first; the script runs from the shell's own directory)
+cd $MYSHELL_DIR
+# The consumer takes 1.5 s per item, so the 4-slot buffer stays full.
+rm -f pc.log
+./demos/pc init 4
+./demos/pc producer 1 8 -v & ./demos/pc consumer 1 8 -v -t 1500 &
+sleep 0.5
+sem
+./demos/pc show
+sched ps
+sleep 12
+./demos/pc check pc.log 1 8
+rm -f pc.log

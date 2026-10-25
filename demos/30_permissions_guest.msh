@@ -1,0 +1,17 @@
+# ===== DEMO 30: the guest role is read-only =====
+# run-as: guest
+id
+cd
+cat $MYSHELL_FS/system/config
+cat $MYSHELL_FS/shared/readme.txt
+touch note.txt
+echo hi > note.txt
+mkdir stuff
+cd $MYSHELL_FS/shared
+touch guest.txt
+echo "guest was here" >> team.txt
+rm readme.txt
+access team.txt
+$MYSHELL_FS/bin/hello.sh
+cat $MYSHELL_FS/logs/app.log | grep -c info
+exit 0

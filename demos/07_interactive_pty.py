@@ -10,7 +10,7 @@ computed by this script from what the shell actually printed.
 import os, pty, re, select, sys, time
 
 SHELL = sys.argv[1] if len(sys.argv) > 1 else "./myshell"
-PROMPT = r"myshell:[^\r\n]*\$ $"
+PROMPT = r"myshell:[^\r\n]*[$#] $"
 
 pid, fd = pty.fork()
 if pid == 0:

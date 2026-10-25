@@ -1,0 +1,38 @@
+# ===== DEMO 32: one shell - processes, scheduling, memory, synchronization, pipes, security =====
+# run-as: alice
+cd
+# --- pipes through the scheduler: each pipeline is one scheduled job ---
+$BURN A 200 100 | grep -c cpu & $BURN B 200 100 | grep -c cpu &
+sched ps
+sleep 1
+# --- paging and pipes: count the page faults of a real process ---
+$DEMOS/memproc pf 8 7,0,1,2,0,3,0,4,2,3,0,3,2,1,2,0,1,7,0,1 -v | grep "PAGE FAULT" | wc -l
+mem ps -a
+# --- semaphores belong to their creator ---
+sem create alice.gate 0
+$DEMOS/counter W 1 --seg z --sem alice.gate &
+sleep 0.2
+sched ps
+login bob
+bob12345
+sem post alice.gate
+sem rm alice.gate
+jobs
+kill %1
+sched policy fifo
+login alice
+alice123
+sem post alice.gate
+sleep 0.3
+jobs
+sem rm alice.gate
+# --- producer-consumer in alice's home, consumer output through a pipe ---
+rm -f pc.log
+$DEMOS/pc init 4
+$DEMOS/pc producer 1 50 & $DEMOS/pc consumer 1 50 -v | grep -c "got item"
+$DEMOS/pc check pc.log 1 50
+# --- the permission model covers redirections inside pipelines ---
+cat $MYSHELL_FS/logs/app.log | grep error > $MYSHELL_FS/system/errors.txt
+cat $MYSHELL_FS/logs/app.log | grep error > errors.txt
+cat errors.txt | wc -l
+exit 0

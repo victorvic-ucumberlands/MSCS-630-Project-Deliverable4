@@ -1,0 +1,44 @@
+# ===== DEMO 31: the admin role =====
+# run-as: admin
+id
+cd $MYSHELL_FS
+cat system/secret.key
+echo "log_level=debug" >> system/config
+tail -1 system/config
+ls -l home
+ls -l home/alice
+cat home/alice/diary.txt
+# --- execute still needs an x bit, even for admin (as for root) ---
+access home/bob/report.sh
+home/bob/report.sh
+system/maintenance.sh
+# --- ownership and modes ---
+touch system/new.conf
+ls -l system/new.conf
+chown alice system/new.conf
+chmod 664 system/new.conf
+ls -l system/new.conf
+chmod u+x,o-r system/new.conf
+ls -l system/new.conf
+chmod 99 system/new.conf
+chown nobody system/new.conf
+rm system/new.conf
+# --- user management ---
+users
+useradd dave -r guest
+dave2026x
+dave2026x
+users
+usermod dave -r standard
+id dave
+userdel dave
+userdel admin
+users
+# --- the audit log: every login and every denied access ---
+audit 15
+# --- system settings ---
+sched policy rr -q 50
+sched policy rr -q 100
+mem config -f 8
+mem config -f 16
+exit 0
