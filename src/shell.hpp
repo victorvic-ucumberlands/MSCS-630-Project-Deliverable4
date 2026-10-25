@@ -33,6 +33,18 @@ class Shell {
   int source_file(const std::string& path);
   int source_depth = 0;
 
+  // ---- Deliverable 4: authentication ------------------------------------
+  std::string login_user;            // -u USER (password from $MYSHELL_PASSWORD)
+  // Read a password: echo off on a terminal; from the next input line otherwise.
+  bool read_secret(const std::string& prompt, std::string& out);
+  bool read_input_line(const std::string& prompt, std::string& out);
+  // Ask for a password and start a session for `name` (login / su).
+  bool login_as(const std::string& name, bool quiet = false);
+  bool login_dialog();               // the login prompt: login: / password:, 3 attempts
+  void start_session(const std::string& name, bool go_home);
+  bool owns(const Job& j) const;     // may the current user control this job?
+  bool logout_requested = false;
+
   // ---- state shared with the built-in commands -------------------------
   JobTable jobs;
   CpuScheduler cpu;            // the resident scheduler: every command the shell starts goes through it
@@ -42,6 +54,7 @@ class Shell {
   int default_priority = 10;   // priority given to commands started without `prio`
   bool live_trace = false;     // print scheduling decisions as they happen
   int last_status = 0;         // $? : status of the most recent command
+  pid_t last_bg = 0;           // $! : process (group) id of the last background job
   bool exit_requested = false;
   int exit_code = 0;
   bool exit_warned = false;    // "there are stopped jobs" already shown once
@@ -75,6 +88,7 @@ class Shell {
   void run_builtin_inline(BuiltinFn fn, const Command& cmd);
   void launch(const Command& cmd, BuiltinFn fn, int priority);
   [[noreturn]] void child_exec(const Command& cmd, BuiltinFn fn, bool scheduled);
+  [[noreturn]] void run_pipeline(const Command& cmd);   // Deliverable 4: the pipeline's leader
   int wait_foreground(Job& job);
   int wait_foreground_unscheduled(Job& job);
   int finish_foreground(int id);

@@ -2,13 +2,14 @@
 //
 // Grammar supported in Deliverable 1:
 //
-//   line     := command ( (';' | '&') command )* [ ';' | '&' ]
+//   line     := pipeline ( (';' | '&') pipeline )* [ ';' | '&' ]
+//   pipeline := command ( '|' command )*                      (Deliverable 4)
 //   command  := word+ with optional redirections  <  >  >>  2>  2>>
 //   word     := text with 'single quotes', "double quotes", \escapes,
 //               $VAR ${VAR} $? $$ and a leading ~ expansion
 //
-// A trailing '&' runs that command in the background.  Pipes and && / ||
-// are recognised but rejected with a clear message (later deliverables).
+// A trailing '&' runs that command (or the whole pipeline) in the background.
+// && and || are recognised but rejected with a clear message.
 //
 // The parser is *lazy*: Parser::next() lexes and expands one command at a time,
 // so "false; echo $?" sees the status of `false`.  The shell therefore makes
@@ -32,6 +33,11 @@ struct Command {
   std::vector<Redirect> redirs;
   bool background = false;         // terminated by '&'
   std::string text;                // original source text (used in job listings)
+  // Deliverable 4: a pipeline "a | b | c" is returned as ONE Command whose
+  // `pipeline` holds every stage in order (each with its own argv and
+  // redirections); argv/redirs then mirror the first stage.  Empty for a
+  // simple command.
+  std::vector<Command> pipeline;
 };
 
 // Looks up a variable ("?" = last status, "$" = shell pid, else environment).
@@ -43,6 +49,7 @@ class Parser {
 
   static constexpr size_t kMaxLine = 4096;  // longest accepted input line
   static constexpr size_t kMaxArgs = 256;   // most words in one command
+  static constexpr size_t kMaxStages = 16;  // most commands in one pipeline
 
   Parser(const std::string& line, VarLookup lookup);
 
@@ -52,7 +59,7 @@ class Parser {
   const std::string& error() const { return error_; }
 
  private:
-  enum class Tok { Word, Semi, Amp, In, Out, Append, Eof, Error };
+  enum class Tok { Word, Semi, Amp, Pipe, In, Out, Append, Eof, Error };
   struct Token {
     Tok kind = Tok::Eof;
     std::string text;

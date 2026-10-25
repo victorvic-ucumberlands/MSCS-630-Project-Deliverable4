@@ -24,6 +24,7 @@
 #include <vector>
 
 #include "builtins.hpp"
+#include "security.hpp"
 #include "shell.hpp"
 
 using Args = std::vector<std::string>;
@@ -396,6 +397,14 @@ int builtin_sched(Shell& sh, const Args& a) {
     return a.size() < 2 ? 1 : 0;
   }
   const std::string& sub = a[1];
+  // Deliverable 4: changing how the CPU is shared affects every user, so it
+  // is a system setting (admin only); looking at it is allowed to everyone.
+  {
+    bool changes = ((sub == "live" || sub == "policy" || sub == "default") && a.size() > 2) || sub == "run" ||
+                   sub == "compare";
+    Security& sec = Security::get();
+    if (changes && !sec.allow(sec.require_admin("sched " + sub + " (a system-wide scheduler setting)"), "sched", "")) return 1;
+  }
   if (sub == "live") return cmd_live(sh, a);
   if (sub == "policy") return cmd_policy(sh, a);
   if (sub == "default") return cmd_default(sh, a);

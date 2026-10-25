@@ -3,6 +3,10 @@
 //   ./myshell                 interactive shell (or reads commands from stdin)
 //   ./myshell script.msh      run a script file
 //   ./myshell -e script.msh   same, but echo each line first (demo transcripts)
+//   ./myshell -u USER ...     log in as USER without the login prompt; the
+//                             password is taken from $MYSHELL_PASSWORD (for
+//                             automated tests and scripted demonstrations)
+//   ./myshell --setup-demo    create the demo users and the managed file tree
 #include <fcntl.h>
 #include <unistd.h>
 
@@ -11,19 +15,34 @@
 #include <cstring>
 #include <string>
 
+#include "security.hpp"
 #include "shell.hpp"
 
 static void usage(const char* prog) {
-  fprintf(stderr, "usage: %s [-e] [script-file]\n"
-                  "  -e   echo each script line before running it\n", prog);
+  fprintf(stderr, "usage: %s [-e] [-u USER] [script-file]  |  %s --setup-demo\n"
+                  "  -e        echo each script line before running it\n"
+                  "  -u USER   log in as USER, password from $MYSHELL_PASSWORD\n"
+                  "  --setup-demo   (re)create the demo users and the file tree fs/\n", prog, prog);
 }
 
 int main(int argc, char** argv) {
   bool echo = false;
   const char* script = nullptr;
+  std::string user;
 
   for (int i = 1; i < argc; ++i) {
     if (!strcmp(argv[i], "-e")) echo = true;
+    else if (!strcmp(argv[i], "-u") && i + 1 < argc) user = argv[++i];
+    else if (!strcmp(argv[i], "--setup-demo")) {
+      Security& sec = Security::get();
+      std::string err = sec.init();
+      if (err.empty()) err = sec.setup_demo();
+      if (!err.empty()) { fprintf(stderr, "myshell: setup: %s\n", err.c_str()); return 1; }
+      printf("demo set up:\n  users     admin (admin123, role admin), alice (alice123, standard),\n"
+             "            bob (bob12345, standard), guest (guest123, guest)\n"
+             "  database  %s\n  files     %s\n", sec.home_dir().c_str(), sec.fs_root().c_str());
+      return 0;
+    }
     else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) { usage(argv[0]); return 0; }
     else if (!script && argv[i][0] != '-') script = argv[i];
     else { usage(argv[0]); return 2; }
@@ -44,6 +63,7 @@ int main(int argc, char** argv) {
   bool interactive = !script && isatty(STDIN_FILENO);
   setvbuf(stdout, nullptr, _IOLBF, 0);  // line-buffered: keeps stdout/stderr ordering in logs
   Shell shell(interactive, echo);
+  shell.login_user = user;
   int rc = shell.run(in);
   if (script) close(in);
   return rc;

@@ -29,6 +29,7 @@
 #include <string>
 #include <vector>
 
+#include "security.hpp"
 #include "shell.hpp"
 
 using Args = std::vector<std::string>;
@@ -116,6 +117,11 @@ static int builtin_cd(Shell&, const Args& a) {
 
   char prev[PATH_MAX];
   if (!getcwd(prev, sizeof prev)) prev[0] = '\0';
+  Security& sec = Security::get();
+  struct stat tst;
+  if (stat(target.c_str(), &tst) == 0 && S_ISDIR(tst.st_mode) &&
+      !sec.allow(sec.check(target, kExec, "entering it (search permission)"), "cd", target))
+    return 1;
   if (chdir(target.c_str()) < 0) {
     fprintf(stderr, "cd: %s: %s\n", target.c_str(), strerror(errno));
     return 1;
@@ -205,6 +211,18 @@ static void ls_entry(const std::string& full, const std::string& name, bool lng)
     printf("?????????? ? ? ? ? ? %s\n", name.c_str());
     return;
   }
+  Security& sec = Security::get();
+  std::string abs = sec.canon(full);
+  if (sec.managed(abs)) {                    // the shell's own owners and modes (Deliverable 4)
+    FileMeta m = sec.meta(abs);
+    char when[32];
+    struct tm tmv;
+    localtime_r(&st.st_mtime, &tmv);
+    strftime(when, sizeof when, "%b %e %H:%M", &tmv);
+    printf("%s %-8s %-8s %8lld %s %s\n", Security::mode_string(m.mode, S_ISDIR(st.st_mode)).c_str(), m.owner.c_str(),
+           m.group.c_str(), (long long)st.st_size, when, name.c_str());
+    return;
+  }
   struct passwd* pw = getpwuid(st.st_uid);
   struct group* gr = getgrgid(st.st_gid);
   char when[32];
@@ -261,7 +279,9 @@ static int builtin_ls(Shell&, const Args& a) {
   for (const auto& f : files) ls_entry(f, f, lng);
   bool header = paths.size() > 1;
   bool first_block = files.empty();
+  Security& sec = Security::get();
   for (const auto& d : dirs) {
+    if (!sec.allow(sec.check(d, kRead, "listing it"), "ls", d)) { rc = 2; continue; }
     DIR* dp = opendir(d.c_str());
     if (!dp) {
       fprintf(stderr, "ls: cannot open directory '%s': %s\n", d.c_str(), strerror(errno));
@@ -311,6 +331,10 @@ static int builtin_cat(Shell&, const Args& a) {
   }
   for (size_t i = 1; i < a.size(); ++i) {
     if (a[i] == "-") { if (!cat_fd(STDIN_FILENO, "stdin", err)) break; continue; }
+    Security& sec = Security::get();
+    struct stat pst;
+    if (stat(a[i].c_str(), &pst) == 0 && !S_ISDIR(pst.st_mode) &&
+        !sec.allow(sec.check(a[i], kRead, "reading it"), "cat", a[i])) { err = true; continue; }
     int fd = open(a[i].c_str(), O_RDONLY);
     if (fd < 0) { fprintf(stderr, "cat: %s: %s\n", a[i].c_str(), strerror(errno)); err = true; continue; }
     struct stat st;
@@ -336,7 +360,12 @@ static int mkdir_p(const std::string& path) {
   for (size_t pos = 1; pos <= path.size(); ++pos) {
     if (pos != path.size() && path[pos] != '/') continue;
     std::string prefix = path.substr(0, pos);
+    struct stat pst;
+    if (stat(prefix.c_str(), &pst) == 0) continue;
+    Security& sec = Security::get();
+    if (!sec.allow(sec.check_create(prefix, "creating a directory"), "mkdir", prefix)) { errno = EACCES; return -2; }
     if (mkdir(prefix.c_str(), 0777) < 0 && errno != EEXIST) return -1;
+    sec.record_new(prefix, true);
   }
   struct stat st;
   if (stat(path.c_str(), &st) < 0) return -1;
@@ -357,8 +386,18 @@ static int builtin_mkdir(Shell&, const Args& a) {
   }
   if (dirs.empty()) { fprintf(stderr, "mkdir: missing operand\n"); return 1; }
   int rc = 0;
+  Security& sec = Security::get();
   for (const auto& d : dirs) {
-    int r = parents ? mkdir_p(d) : mkdir(d.c_str(), 0777);
+    int r;
+    if (parents) {
+      r = mkdir_p(d);
+      if (r == -2) { rc = 1; continue; }        // denied (already reported)
+    } else {
+      struct stat pst;
+      if (stat(d.c_str(), &pst) != 0 && !sec.allow(sec.check_create(d, "creating a directory"), "mkdir", d)) { rc = 1; continue; }
+      r = mkdir(d.c_str(), 0777);
+      if (r == 0) sec.record_new(d, true);
+    }
     if (r < 0) {
       fprintf(stderr, "mkdir: cannot create directory '%s': %s\n", d.c_str(), strerror(errno));
       rc = 1;
@@ -370,10 +409,19 @@ static int builtin_mkdir(Shell&, const Args& a) {
 static int builtin_rmdir(Shell&, const Args& a) {
   if (a.size() < 2) { fprintf(stderr, "rmdir: missing operand\n"); return 1; }
   int rc = 0;
+  Security& sec = Security::get();
   for (size_t i = 1; i < a.size(); ++i) {
+    struct stat pst;
+    if (stat(a[i].c_str(), &pst) == 0 && !sec.allow(sec.check_delete(a[i], "removing a directory"), "rmdir", a[i])) {
+      rc = 1;
+      continue;
+    }
+    std::string abs = sec.entry(a[i]);
     if (rmdir(a[i].c_str()) < 0) {
       fprintf(stderr, "rmdir: failed to remove '%s': %s\n", a[i].c_str(), strerror(errno));
       rc = 1;
+    } else {
+      sec.forget(abs);
     }
   }
   return rc;
@@ -408,9 +456,16 @@ static int builtin_rm(Shell&, const Args& a) {
     } else if (S_ISDIR(st.st_mode)) {
       fprintf(stderr, "rm: cannot remove '%s': Is a directory (use rmdir)\n", f.c_str());
       rc = 1;
-    } else if (unlink(f.c_str()) < 0) {
-      fprintf(stderr, "rm: cannot remove '%s': %s\n", f.c_str(), strerror(errno));
+    } else if (!Security::get().allow(Security::get().check_delete(f, "removing a file"), "rm", f)) {
       rc = 1;
+    } else {
+      std::string abs = Security::get().entry(f);
+      if (unlink(f.c_str()) < 0) {
+        fprintf(stderr, "rm: cannot remove '%s': %s\n", f.c_str(), strerror(errno));
+        rc = 1;
+      } else {
+        Security::get().forget(abs);
+      }
     }
   }
   return rc;
@@ -430,12 +485,19 @@ static int builtin_touch(Shell&, const Args& a) {
   }
   if (files.empty()) { fprintf(stderr, "touch: missing file operand\n"); return 1; }
   int rc = 0;
+  Security& sec = Security::get();
   for (const auto& f : files) {
-    if (utimensat(AT_FDCWD, f.c_str(), nullptr, 0) == 0) continue;   // existed: mtime/atime = now
-    int saved = errno;
+    struct stat pst;
+    bool exists = stat(f.c_str(), &pst) == 0;
+    if (!sec.allow(exists ? sec.check(f, kWrite, "updating its time stamp") : sec.check_create(f, "creating a file"), "touch", f)) {
+      rc = 1;
+      continue;
+    }
+    if (exists && utimensat(AT_FDCWD, f.c_str(), nullptr, 0) == 0) continue;   // existed: mtime/atime = now
+    int saved = exists ? errno : ENOENT;
     if (saved == ENOENT) {
       int fd = open(f.c_str(), O_WRONLY | O_CREAT, 0644);
-      if (fd >= 0) { close(fd); continue; }
+      if (fd >= 0) { close(fd); sec.record_new(f, false); continue; }
       saved = errno;
     }
     fprintf(stderr, "touch: cannot touch '%s': %s\n", f.c_str(), strerror(saved));
@@ -509,6 +571,23 @@ static int builtin_kill(Shell& sh, const Args& a) {
       }
       target = (pid_t)pid;
       job = sh.jobs.find_by_pid((pid_t)pid);
+      Security& sec = Security::get();
+      if (!job && !sec.is_admin()) {                     // Deliverable 4: not a job of ours
+        Decision d;
+        d.ok = false;
+        d.why = "pid " + t + " is not one of " + sec.user() + "'s jobs; only admin may signal other processes";
+        sec.allow(d, "kill", "");
+        rc = 1;
+        continue;
+      }
+    }
+    if (job && !sh.owns(*job)) {                         // another user's job
+      Decision d;
+      d.ok = false;
+      d.why = "job [" + std::to_string(job->id) + "] belongs to " + job->owner + "; only its owner or admin may signal it";
+      Security::get().allow(d, "kill", t);
+      rc = 1;
+      continue;
     }
 
     // A job the shell schedules: stopping and continuing go through the
@@ -571,8 +650,8 @@ static int builtin_jobs(Shell& sh, const Args& a) {
 
   if (all) {   // accounting table: every job record, finished ones included
     std::vector<const Job*> rows;
-    for (const Job& j : sh.jobs.history()) rows.push_back(&j);
-    for (Job* j : sh.jobs.active()) rows.push_back(j);
+    for (const Job& j : sh.jobs.history()) if (sh.owns(j)) rows.push_back(&j);
+    for (Job* j : sh.jobs.active()) if (sh.owns(*j)) rows.push_back(j);
     std::sort(rows.begin(), rows.end(), [](const Job* x, const Job* y) { return x->serial < y->serial; });
     // TURN = exit - start; WAIT = time in the ready queue; RESP = first time on
     // the CPU - start; HELD = time holding the CPU; BLOCK = time blocked in the
@@ -595,13 +674,16 @@ static int builtin_jobs(Shell& sh, const Args& a) {
     return 0;
   }
 
+  Security& sec = Security::get();
   for (Job* j : sh.jobs.active()) {
+    if (!sh.owns(*j)) continue;                    // Deliverable 4: each user sees their own jobs
     if (pids) { printf("%d\n", (int)j->pid); continue; }
     char mark = j == sh.jobs.current() ? '+' : (j == sh.jobs.previous() ? '-' : ' ');
     printf("[%d]%c  ", j->id, mark);
     if (lng) printf("%-6d ", (int)j->pid);
-    printf("%-10s %s%s\n", to_string(j->state), j->command.c_str(),
-           j->state == JobState::Running ? " &" : "");
+    printf("%-10s %s%s%s\n", to_string(j->state), j->command.c_str(),
+           j->state == JobState::Running ? " &" : "",
+           j->owner != sec.user() && !j->owner.empty() ? ("   (owner " + j->owner + ")").c_str() : "");
   }
   return 0;
 }
@@ -611,6 +693,13 @@ static int builtin_fg(Shell& sh, const Args& a) {
   std::string err;
   Job* j = sh.resolve_job(a.size() > 1 ? a[1] : "", err);
   if (!j) { fprintf(stderr, "fg: %s\n", err.c_str()); return 1; }
+  if (!sh.owns(*j)) {
+    Decision d;
+    d.ok = false;
+    d.why = "job [" + std::to_string(j->id) + "] belongs to " + j->owner + "; only its owner or admin may control it";
+    Security::get().allow(d, "fg", "");
+    return 1;
+  }
   return sh.foreground_job(*j);
 }
 
@@ -619,6 +708,13 @@ static int builtin_bg(Shell& sh, const Args& a) {
   std::string err;
   Job* j = sh.resolve_job(a.size() > 1 ? a[1] : "", err);
   if (!j) { fprintf(stderr, "bg: %s\n", err.c_str()); return 1; }
+  if (!sh.owns(*j)) {
+    Decision d;
+    d.ok = false;
+    d.why = "job [" + std::to_string(j->id) + "] belongs to " + j->owner + "; only its owner or admin may control it";
+    Security::get().allow(d, "bg", "");
+    return 1;
+  }
   return sh.background_job(*j);
 }
 
@@ -628,6 +724,8 @@ static int builtin_source(Shell& sh, const Args& a) {
     fprintf(stderr, "source: usage: source FILE\n");
     return 2;
   }
+  Security& sec = Security::get();
+  if (!sec.allow(sec.check(a[1], kRead, "reading the script"), "source", a[1])) return 1;
   return sh.source_file(a[1]);
 }
 
@@ -653,8 +751,12 @@ static int builtin_help(Shell&, const Args&) {
        "  mem ...             paged memory: frames, page tables, faults, replacement (mem help)\n"
        "  sem ...             semaphores and mutexes for processes (sem help)\n"
        "  source FILE         run the commands in FILE in this shell (also: . FILE)\n"
+       "security (Deliverable 4):\n"
+       "  login [USER] | logout | whoami | id [USER] | users\n"
+       "  useradd NAME [-r ROLE] | userdel NAME | usermod NAME -r ROLE | unlock NAME | passwd [USER]\n"
+       "  chmod MODE FILE... | chown USER[:GROUP] FILE... | access FILE... | audit [N] | cp SRC DST | mv SRC DST\n"
        "  exit [code]         leave the shell\n"
-       "syntax: cmd &   cmd1 ; cmd2   > >> < 2>   'quotes' \"quotes\"   $VAR $? $$   # comment");
+       "syntax: cmd &   cmd1 ; cmd2   a | b | c   > >> < 2>   'quotes' \"quotes\"   $VAR $? $$   # comment");
   return 0;
 }
 
@@ -670,7 +772,11 @@ BuiltinFn find_builtin(const std::string& name) {
       {"jobs", builtin_jobs},   {"fg", builtin_fg},       {"bg", builtin_bg},
       {"help", builtin_help},   {"sched", builtin_sched},
       {"mem", builtin_mem},     {"sem", builtin_sem},     {"source", builtin_source},
-      {".", builtin_source}};
+      {".", builtin_source},
+#define MYSHELL_ENTRY(n) {#n, builtin_##n},
+      MYSHELL_SECURITY_BUILTINS(MYSHELL_ENTRY)
+#undef MYSHELL_ENTRY
+  };
   auto it = table.find(name);
   return it == table.end() ? nullptr : it->second;
 }

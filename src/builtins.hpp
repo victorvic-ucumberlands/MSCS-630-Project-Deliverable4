@@ -21,5 +21,13 @@ int builtin_sched(Shell& sh, const std::vector<std::string>& args);
 int builtin_mem(Shell& sh, const std::vector<std::string>& args);
 int builtin_sem(Shell& sh, const std::vector<std::string>& args);
 
+// Deliverable 4 (security_builtin.cpp)
+#define MYSHELL_SECURITY_BUILTINS(X) \
+  X(login) X(logout) X(whoami) X(id) X(users) X(useradd) X(userdel) X(usermod) X(unlock) X(passwd) \
+  X(chmod) X(chown) X(access) X(audit) X(cp) X(mv)
+#define MYSHELL_DECLARE(n) int builtin_##n(Shell& sh, const std::vector<std::string>& args);
+MYSHELL_SECURITY_BUILTINS(MYSHELL_DECLARE)
+#undef MYSHELL_DECLARE
+
 // Signal helpers shared with the shell core (job notifications).
 const char* signal_short_name(int sig);   // "TERM", "KILL", ... or nullptr

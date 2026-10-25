@@ -36,6 +36,8 @@
 #include <sys/signalfd.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <termios.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -44,22 +46,122 @@
 #include <cstring>
 
 #include "builtins.hpp"
+#include "security.hpp"
 
 // ---------------------------------------------------------------------------
 // Small helpers
 // ---------------------------------------------------------------------------
 
 // Open the target of a redirection.  Prints a diagnostic and returns -1 on error.
+// Deliverable 4: the shell checks the user's permission first (read for <,
+// write - or create in the directory - for > and >>) and records a file it
+// creates as owned by the user.
+// May the current user make this redirection?  (prints the denial)
+static bool authorize_redirect(const Redirect& r) {
+  Security& sec = Security::get();
+  struct stat st;
+  bool exists = stat(r.path.c_str(), &st) == 0;
+  if (r.kind == Redirect::Kind::In) return sec.allow(sec.check(r.path, kRead, "reading (<)"), "myshell", r.path);
+  return sec.allow(exists ? sec.check(r.path, kWrite, r.kind == Redirect::Kind::Out ? "writing (>)" : "appending (>>)")
+                          : sec.check_create(r.path, "creating (>)"),
+                   "myshell", r.path);
+}
+
 static int open_redirect(const Redirect& r) {
   int flags = 0;
+  Security& sec = Security::get();
+  struct stat st;
+  bool exists = stat(r.path.c_str(), &st) == 0;
+  if (!authorize_redirect(r)) return -1;
   switch (r.kind) {
-    case Redirect::Kind::In:     flags = O_RDONLY; break;
-    case Redirect::Kind::Out:    flags = O_WRONLY | O_CREAT | O_TRUNC; break;
-    case Redirect::Kind::Append: flags = O_WRONLY | O_CREAT | O_APPEND; break;
+    case Redirect::Kind::In:
+      flags = O_RDONLY;
+      break;
+    case Redirect::Kind::Out:
+    case Redirect::Kind::Append:
+      flags = O_WRONLY | O_CREAT | (r.kind == Redirect::Kind::Out ? O_TRUNC : O_APPEND);
+      break;
   }
   int fd = open(r.path.c_str(), flags, 0644);
   if (fd < 0) fprintf(stderr, "myshell: %s: %s\n", r.path.c_str(), strerror(errno));
+  else if (!exists && flags != O_RDONLY) sec.record_new(r.path, false);
   return fd;
+}
+
+// Programs that modify the files they are given (their file arguments need
+// write permission, not just read).
+static bool modifies_its_files(const std::string& prog) {
+  static const char* w[] = {"tee", "truncate", "dd", "ln", "shred", "unlink", "install", "chmod", "chown", "chgrp",
+                            "sed", "cp", "mv", "rm", "touch", "mkdir", "rmdir", "rsync", nullptr};
+  std::string base = prog.substr(prog.rfind('/') + 1);
+  for (int i = 0; w[i]; ++i)
+    if (base == w[i]) return true;
+  return false;
+}
+
+// Before an external program runs: the program file needs execute permission
+// (and read, for a script), and every existing file it is given needs read
+// (or write, for a program that modifies its files) - all decided by the
+// shell's permission model inside the managed tree.
+static bool authorize_program(const Command& c) {
+  Security& sec = Security::get();
+  const std::string& prog = c.argv[0];
+  std::string path;
+  if (prog.find('/') != std::string::npos) {
+    path = prog;
+  } else {                                         // a program found on $PATH
+    const char* p = getenv("PATH");
+    std::string dirs = p ? p : "/usr/bin:/bin";
+    size_t i = 0;
+    while (i <= dirs.size()) {
+      size_t j = dirs.find(':', i);
+      std::string d = dirs.substr(i, j == std::string::npos ? std::string::npos : j - i);
+      std::string cand = (d.empty() ? "." : d) + "/" + prog;
+      if (access(cand.c_str(), X_OK) == 0) { path = cand; break; }
+      if (j == std::string::npos) break;
+      i = j + 1;
+    }
+  }
+  if (!path.empty()) {
+    std::string abs = sec.canon(path);
+    if (sec.managed(abs) || sec.in_db(abs)) {
+      int need = kExec;
+      if (FILE* f = fopen(abs.c_str(), "r")) {      // a script must also be readable
+        char b[2] = {0, 0};
+        if (fread(b, 1, 2, f) == 2 && b[0] == '#' && b[1] == '!') need |= kRead;
+        fclose(f);
+      }
+      if (!sec.allow(sec.check(abs, need, need & kRead ? "running a script" : "running a program"), "myshell", path))
+        return false;
+    }
+  }
+  bool writer = modifies_its_files(prog);
+  std::string base = prog.substr(prog.rfind('/') + 1);
+  // ln: a link grants nothing (the target is checked whenever the link is
+  // used), so only the place where the link is created is checked
+  size_t last = c.argv.size() - 1;
+  if (base == "ln") {
+    while (last >= 1 && c.argv[last][0] == '-') --last;
+    if (last < 1) return true;
+  }
+  for (size_t i = (base == "ln" ? last : 1); i < c.argv.size(); ++i) {
+    const std::string& a = c.argv[i];
+    if (a.empty() || a[0] == '-') continue;
+    struct stat st;
+    if (stat(a.c_str(), &st) < 0) {
+      // a file that a writer program would create: the directory must allow it
+      if (writer && (base == "ln" || i == last) &&
+          !sec.allow(sec.check_create(a, "creating it"), prog.c_str(), a))
+        return false;
+      continue;
+    }
+    std::string abs = sec.canon(a);
+    if (!sec.managed(abs) && !sec.in_db(abs) && !writer) continue;
+    int need = S_ISDIR(st.st_mode) ? (kRead | kExec) : kRead;
+    if (writer) need |= kWrite;
+    if (!sec.allow(sec.check(abs, need, writer ? "modifying it" : "reading it"), prog.c_str(), a)) return false;
+  }
+  return true;
 }
 
 static long tv_ms(const struct timeval& tv) { return tv.tv_sec * 1000L + tv.tv_usec / 1000L; }
@@ -73,6 +175,10 @@ Shell::Shell(bool interactive, bool echo_input)
     : interactive_(interactive), echo_input_(echo_input) {
   shell_pid = getpid();
   shell_pgid_ = getpgrp();
+  {
+    std::string err = Security::get().init();
+    if (!err.empty()) fprintf(stderr, "myshell: security: %s\n", err.c_str());
+  }
   start_ms_ = proc::mono_ms();
   signal(SIGPIPE, SIG_IGN);  // a closed pipe must not kill the shell; write() gets EPIPE instead
 
@@ -124,6 +230,14 @@ Shell::Shell(bool interactive, bool echo_input)
   kern.clock = [this] { return now_ms(); };
   kern.on_block_change = [this] { cpu.reprobe(); };
   kern.before_wake = [this](pid_t p) { cpu.wake(p); };
+  kern.sync.user_of = [this](pid_t p) -> std::string {     // the user a process works for
+    if (p > 0) {
+      pid_t g = getpgid(p);
+      for (Job* j : jobs.active())
+        if (j->pgid == g) return j->owner;
+    }
+    return Security::get().user();
+  };
   cpu.pid_hint = [this](pid_t p) { return kern.hint(p); };
   cpu.wait_reason = [this](pid_t p) { return kern.wait_reason(p); };
   std::string err;
@@ -166,6 +280,7 @@ void Shell::install_scheduler_hooks() {
 std::string Shell::lookup_var(const std::string& name) {
   if (name == "?") return std::to_string(last_status);
   if (name == "$") return std::to_string(shell_pid);
+  if (name == "!") return last_bg ? std::to_string(last_bg) : "";
   const char* v = getenv(name.c_str());
   return v ? v : "";
 }
@@ -177,7 +292,105 @@ std::string Shell::prompt() {
   if (home && *home && cwd.compare(0, strlen(home), home) == 0 &&
       (cwd.size() == strlen(home) || cwd[strlen(home)] == '/'))
     cwd = "~" + cwd.substr(strlen(home));
-  return "myshell:" + cwd + "$ ";
+  Security& sec = Security::get();
+  if (cwd[0] == '/' && sec.managed(cwd)) cwd = sec.rel(cwd);   // inside the managed tree: fs/...
+  return (sec.logged_in() ? sec.user() + "@" : std::string()) + "myshell:" + cwd + (sec.is_admin() ? "# " : "$ ");
+}
+
+// ---------------------------------------------------------------------------
+// Authentication (Deliverable 4)
+// ---------------------------------------------------------------------------
+bool Shell::read_input_line(const std::string& prompt_text, std::string& out) {
+  fputs(prompt_text.c_str(), stdout);
+  fflush(stdout);
+  if (!read_line(out)) return false;
+  while (!out.empty() && out.back() == '\r') out.pop_back();
+  return true;
+}
+
+bool Shell::read_secret(const std::string& prompt_text, std::string& out) {
+  // Echo goes off BEFORE the prompt appears, so nothing typed after it is shown.
+  struct termios t{}, quiet{};
+  bool tty = isatty(in_fd_) && tcgetattr(in_fd_, &t) == 0;
+  if (tty) {
+    quiet = t;
+    quiet.c_lflag &= ~(tcflag_t)(ECHO | ECHONL);
+    tcsetattr(in_fd_, TCSANOW, &quiet);
+  }
+  fputs(prompt_text.c_str(), stdout);
+  fflush(stdout);
+  bool ok = read_line(out);
+  if (tty) {
+    tcsetattr(in_fd_, TCSANOW, &t);
+    fputc('\n', stdout);
+  } else {
+    fputs("********\n", stdout);                 // read from a script: never shown
+  }
+  fflush(stdout);
+  while (!out.empty() && out.back() == '\r') out.pop_back();
+  return ok;
+}
+
+void Shell::start_session(const std::string& name, bool go_home) {
+  Security& sec = Security::get();
+  sec.begin_session(name);
+  std::string home = sec.home_of(name);
+  struct stat st;
+  if (stat(home.c_str(), &st) == 0 && S_ISDIR(st.st_mode)) {
+    setenv("HOME", home.c_str(), 1);
+    if (go_home && chdir(home.c_str()) == 0) setenv("PWD", home.c_str(), 1);
+  }
+  setenv("USER", name.c_str(), 1);
+  setenv("LOGNAME", name.c_str(), 1);
+}
+
+bool Shell::login_as(const std::string& name, bool quiet) {
+  Security& sec = Security::get();
+  std::string pw;
+  if (!read_secret("password: ", pw)) return false;
+  Security::Auth a = sec.authenticate(name, pw);
+  std::fill(pw.begin(), pw.end(), '\0');
+  if (a == Security::Auth::Ok) {
+    start_session(name, true);
+    if (!quiet) {
+      const User* u = sec.current();
+      char when[64] = "never";
+      if (sec.previous_login) {
+        time_t t = (time_t)sec.previous_login;
+        struct tm tmv;
+        localtime_r(&t, &tmv);
+        strftime(when, sizeof when, "%Y-%m-%d %H:%M:%S", &tmv);
+      }
+      printf("Welcome, %s (role %s, group %s). Last login: %s.\n", name.c_str(), to_string(u->role),
+             group_of(u->role).c_str(), when);
+      if (sec.failures_before_login)
+        printf("Warning: %d failed login attempt(s) since your last login.\n", sec.failures_before_login);
+      fflush(stdout);
+    }
+    return true;
+  }
+  proc::sleep_ms(1000);                               // slow down guessing
+  if (a == Security::Auth::Locked) fprintf(stderr, "login: account '%s' is locked; ask an administrator\n", name.c_str());
+  else fprintf(stderr, "login: Login incorrect\n");
+  return false;
+}
+
+bool Shell::login_dialog() {
+  Security& sec = Security::get();
+  printf("myshell - please log in (users: %zu)\n", sec.users().size());
+  for (int attempt = 1; attempt <= 3; ++attempt) {
+    std::string name;
+    if (!read_input_line("login: ", name)) return false;
+    if (name.empty()) { --attempt; continue; }
+    if (login_as(name)) return true;
+  }
+  fprintf(stderr, "login: too many failed attempts\n");
+  return false;
+}
+
+bool Shell::owns(const Job& j) const {
+  Security& sec = Security::get();
+  return sec.is_admin() || j.owner.empty() || j.owner == sec.user();
 }
 
 // ---------------------------------------------------------------------------
@@ -254,7 +467,30 @@ bool Shell::read_line(std::string& line) {
 // ---------------------------------------------------------------------------
 int Shell::run(int fd) {
   in_fd_ = fd;
+  Security& sec = Security::get();
+  if (!sec.have_users()) {
+    fprintf(stderr, "myshell: no users are defined yet; run './myshell --setup-demo' first\n");
+    return 1;
+  }
+  if (!login_user.empty()) {                    // -u USER: password from the environment
+    const char* pw = getenv("MYSHELL_PASSWORD");
+    if (!pw || sec.authenticate(login_user, pw) != Security::Auth::Ok) {
+      fprintf(stderr, "myshell: authentication failed for '%s'\n", login_user.c_str());
+      return 1;
+    }
+    unsetenv("MYSHELL_PASSWORD");               // children must not inherit it
+    start_session(login_user, false);
+  } else if (interactive_ && !login_dialog()) {
+    return 1;
+  }
   while (!exit_requested) {
+    if (logout_requested) {                     // logout: back to the login prompt
+      logout_requested = false;
+      if (interactive_) {
+        fputc('\n', stdout);
+        if (!login_dialog()) break;
+      }
+    }
     pump(0, false);              // between commands: reap and let the scheduler act
     reap_children(true);         // report finished/stopped background jobs first
     if (interactive_) {
@@ -365,8 +601,17 @@ void Shell::execute_line(const std::string& line) {
 
 void Shell::run_command(const Command& cmd) {
   if (cmd.argv.empty()) return;
+  if (!Security::get().logged_in() && cmd.argv[0] != "login" && cmd.argv[0] != "exit" && cmd.argv[0] != "help") {
+    fprintf(stderr, "myshell: not logged in (use: login USER)\n");
+    last_status = 1;
+    return;
+  }
   if (cmd.argv[0] != "exit") exit_warned = false;
   if (cmd.argv[0] == "prio") { run_prio(cmd); return; }
+  if (!cmd.pipeline.empty()) {               // a | b | c: one job, scheduled as a unit
+    launch(cmd, nullptr, default_priority);
+    return;
+  }
 
   BuiltinFn fn = find_builtin(cmd.argv[0]);
   if (fn && !cmd.background)
@@ -399,12 +644,38 @@ void Shell::run_prio(const Command& cmd) {
     last_status = 2;
     return;
   }
+  Security& sec = Security::get();
+  if (n < default_priority && !sec.is_admin()) {          // like nice(1): only root may raise priority
+    Decision d;
+    d.ok = false;
+    d.why = "priority " + std::to_string(n) + " is more urgent than the default " + std::to_string(default_priority) +
+            "; only admin may raise a priority (" + sec.user() + " is " + to_string(sec.current()->role) + ")";
+    sec.allow(d, "prio", "");
+    last_status = 1;
+    return;
+  }
   if (!a[2].empty() && a[2][0] == '%') {                  // renice an existing job
     if (a.size() > 3) { fprintf(stderr, "prio: too many arguments\n"); last_status = 2; return; }
     reap_children(false);
     std::string err;
     Job* j = resolve_job(a[2], err);
     if (!j || j->finished()) { fprintf(stderr, "prio: %s\n", j ? "job has finished" : err.c_str()); last_status = 1; return; }
+    if (!owns(*j)) {
+      Decision d;
+      d.ok = false;
+      d.why = "job [" + std::to_string(j->id) + "] belongs to " + j->owner;
+      sec.allow(d, "prio", a[2]);
+      last_status = 1;
+      return;
+    }
+    if ((int)n < j->priority && !sec.is_admin()) {
+      Decision d;
+      d.ok = false;
+      d.why = "only admin may make a job more urgent (" + std::to_string(j->priority) + " -> " + std::to_string(n) + ")";
+      sec.allow(d, "prio", a[2]);
+      last_status = 1;
+      return;
+    }
     int old = j->priority;
     if (cpu.manages(*j)) cpu.renice(*j, (int)n);
     else j->priority = (int)n;
@@ -418,6 +689,11 @@ void Shell::run_prio(const Command& cmd) {
   }
   Command inner = cmd;
   inner.argv.erase(inner.argv.begin(), inner.argv.begin() + 2);
+  if (!inner.pipeline.empty()) {             // prio N a | b: the priority of the whole pipeline
+    auto& a0 = inner.pipeline[0].argv;
+    a0.erase(a0.begin(), a0.begin() + 2);
+    if (a0.empty()) { fprintf(stderr, "prio: usage: prio N COMMAND [ARGS...]   or   prio N %%JOB\n"); last_status = 2; return; }
+  }
   // Drop "prio N" from the source text shown by `jobs`.
   std::string t = cmd.text;
   for (int word = 0; word < 2; ++word) {
@@ -428,7 +704,7 @@ void Shell::run_prio(const Command& cmd) {
   size_t s = t.find_first_not_of(" \t");
   inner.text = (s == std::string::npos) ? "" : t.substr(s);
 
-  BuiltinFn fn = find_builtin(inner.argv[0]);
+  BuiltinFn fn = inner.pipeline.empty() ? find_builtin(inner.argv[0]) : nullptr;
   if (fn && !inner.background) run_builtin_inline(fn, inner);   // built-ins run in the shell
   else launch(inner, fn, (int)n);
 }
@@ -483,8 +759,8 @@ void Shell::child_exec(const Command& cmd, BuiltinFn fn, bool scheduled) {
     if (nul >= 0) { dup2(nul, STDIN_FILENO); close(nul); }
   }
 
-  // 4. Redirections.
-  for (const Redirect& r : cmd.redirs) {
+  // 4. Redirections (a pipeline's redirections belong to its stages).
+  for (const Redirect& r : cmd.pipeline.empty() ? cmd.redirs : std::vector<Redirect>{}) {
     int fd = open_redirect(r);
     if (fd < 0) _exit(1);
     dup2(fd, r.fd);
@@ -494,7 +770,10 @@ void Shell::child_exec(const Command& cmd, BuiltinFn fn, bool scheduled) {
   // 5. Scheduled: wait in the ready queue until the scheduler continues us.
   if (scheduled) raise(SIGSTOP);
 
-  // 6. Built-in with '&': run it here and exit with its status.
+  // 6. A pipeline: this process becomes its leader and creates the stages.
+  if (!cmd.pipeline.empty()) run_pipeline(cmd);
+
+  // 7. Built-in with '&': run it here and exit with its status.
   if (fn) {
     int st = fn(*this, cmd.argv);
     fflush(stdout);
@@ -502,7 +781,7 @@ void Shell::child_exec(const Command& cmd, BuiltinFn fn, bool scheduled) {
     _exit(st);
   }
 
-  // 7. Replace the process image.
+  // 8. Replace the process image.
   std::vector<char*> args;
   for (const auto& a : cmd.argv) args.push_back(const_cast<char*>(a.c_str()));
   args.push_back(nullptr);
@@ -515,6 +794,104 @@ void Shell::child_exec(const Command& cmd, BuiltinFn fn, bool scheduled) {
   _exit(e == ENOENT ? 127 : 126);
 }
 
+// ---------------------------------------------------------------------------
+// Pipelines (Deliverable 4)
+// ---------------------------------------------------------------------------
+// Runs in the job's first process, a forked copy of the shell that the
+// scheduler already treats as the job (it is the process-group leader).  It
+// creates one child per stage, connected by kernel pipes:
+//
+//     stage 0 stdout -> pipe 0 -> stage 1 stdin,  stage 1 stdout -> pipe 1 -> ...
+//
+// Every stage is in the leader's process group, so the scheduler's SIGSTOP /
+// SIGCONT, Ctrl-C and Ctrl-Z reach the whole pipeline at once, and the
+// scheduler's /proc probe sees all stages as descendants of the leader.  A
+// stage's own redirections are applied after the pipe, so they win (as in
+// sh).  The leader waits for all stages and exits with the status of the
+// LAST one; if the last stage was killed by a signal, it dies of the same one.
+void Shell::run_pipeline(const Command& cmd) {
+  const size_t n = cmd.pipeline.size();
+  sigset_t term, old;
+  sigemptyset(&term);
+  for (int sg : {SIGINT, SIGQUIT, SIGTERM, SIGHUP}) sigaddset(&term, sg);
+  sigprocmask(SIG_BLOCK, &term, &old);        // decided below, after the stages exist
+  std::vector<pid_t> pids;
+  int in = -1;                                 // read end of the previous pipe
+  for (size_t i = 0; i < n; ++i) {
+    int fds[2] = {-1, -1};
+    if (i + 1 < n && pipe2(fds, O_CLOEXEC) < 0) {
+      fprintf(stderr, "myshell: pipe: %s\n", strerror(errno));
+      break;
+    }
+    pid_t pid = fork();
+    if (pid < 0) {
+      fprintf(stderr, "myshell: fork: %s\n", strerror(errno));
+      break;
+    }
+    if (pid == 0) {                            // ---- stage i ----
+      sigprocmask(SIG_SETMASK, &old, nullptr);
+      if (in >= 0) { dup2(in, STDIN_FILENO); close(in); }
+      if (i + 1 < n) { dup2(fds[1], STDOUT_FILENO); close(fds[0]); close(fds[1]); }
+      const Command& st = cmd.pipeline[i];
+      for (const Redirect& r : st.redirs) {
+        int fd = open_redirect(r);
+        if (fd < 0) _exit(1);
+        dup2(fd, r.fd);
+        close(fd);
+      }
+      if (BuiltinFn fn = find_builtin(st.argv[0])) {   // ls | grep txt: our own ls
+        int rc = fn(*this, st.argv);
+        fflush(stdout);
+        fflush(stderr);
+        _exit(rc);
+      }
+      std::vector<char*> args;
+      for (const auto& a : st.argv) args.push_back(const_cast<char*>(a.c_str()));
+      args.push_back(nullptr);
+      execvp(args[0], args.data());
+      int e = errno;
+      if (e == ENOENT && st.argv[0].find('/') == std::string::npos)
+        fprintf(stderr, "myshell: %s: command not found\n", args[0]);
+      else
+        fprintf(stderr, "myshell: %s: %s\n", args[0], strerror(e));
+      _exit(e == ENOENT ? 127 : 126);
+    }
+    pids.push_back(pid);                       // ---- leader ----
+    if (in >= 0) close(in);
+    if (i + 1 < n) { close(fds[1]); in = fds[0]; }
+  }
+  if (in >= 0) close(in);
+  // Termination signals are for the stages; the leader stays to report how
+  // the LAST stage ended (a Ctrl-C reaches every stage of the group).
+  // A signal that arrived while the stages were being created (kill %1 right
+  // after the job started) reached only the stages that existed then: pass it
+  // on to the whole group, so no stage survives it.
+  sigset_t pend;
+  sigpending(&pend);
+  for (int sg : {SIGINT, SIGQUIT, SIGTERM, SIGHUP}) signal(sg, SIG_IGN);
+  sigprocmask(SIG_SETMASK, &old, nullptr);
+  for (int sg : {SIGINT, SIGQUIT, SIGTERM, SIGHUP})
+    if (sigismember(&pend, sg) == 1) kill(0, sg);
+  int last = 0;
+  for (size_t i = 0; i < pids.size(); ++i) {
+    int st = 0;
+    while (waitpid(pids[i], &st, 0) < 0 && errno == EINTR) {}
+    if (i + 1 == pids.size()) last = st;
+  }
+  if (pids.size() < n) _exit(1);
+  if (WIFSIGNALED(last)) {
+    int sg = WTERMSIG(last);
+    signal(sg, SIG_DFL);
+    sigset_t one;
+    sigemptyset(&one);
+    sigaddset(&one, sg);
+    sigprocmask(SIG_UNBLOCK, &one, nullptr);
+    raise(sg);
+    _exit(128 + sg);
+  }
+  _exit(WIFEXITED(last) ? WEXITSTATUS(last) : 1);
+}
+
 void Shell::launch(const Command& cmd, BuiltinFn fn, int priority) {
   // Flush buffered output first, otherwise the child would inherit a copy of
   // it and print it a second time.
@@ -523,6 +900,18 @@ void Shell::launch(const Command& cmd, BuiltinFn fn, int priority) {
   // `sched` itself is a scheduler (an experiment run with '&'): it is never
   // scheduled, or two schedulers would be stopping each other's processes.
   const bool scheduled = live && !(fn && cmd.argv[0] == "sched");
+
+  // Deliverable 4: every program the job will run is authorized first; a
+  // denial anywhere in a pipeline runs nothing.
+  if (cmd.pipeline.empty()) {
+    if (!fn && !authorize_program(cmd)) { last_status = 126; return; }
+  } else {
+    for (const Command& st : cmd.pipeline) {
+      if (!find_builtin(st.argv[0]) && !authorize_program(st)) { last_status = 126; return; }
+      for (const Redirect& r : st.redirs)
+        if (!authorize_redirect(r)) { last_status = 126; return; }
+    }
+  }
 
   pid_t pid = fork();
   if (pid < 0) {
@@ -536,7 +925,14 @@ void Shell::launch(const Command& cmd, BuiltinFn fn, int priority) {
   setpgid(pid, pid);
   Job& job = jobs.add(pid, pid, cmd.text, !cmd.background);
   job.priority = priority;
-  job.sched_label = short_label(cmd.argv);
+  job.owner = Security::get().user();
+  if (cmd.pipeline.empty()) {
+    job.sched_label = short_label(cmd.argv);
+  } else {                                   // "cat|grep|sort"
+    std::string l;
+    for (const Command& st : cmd.pipeline) l += (l.empty() ? "" : "|") + st.argv[0].substr(st.argv[0].rfind('/') + 1);
+    job.sched_label = l.size() > 15 ? l.substr(0, 14) + "~" : l;
+  }
 
   if (scheduled) {
     // Wait for the child to stop itself just before exec.
@@ -556,6 +952,7 @@ void Shell::launch(const Command& cmd, BuiltinFn fn, int priority) {
 
   if (cmd.background) {
     printf("[%d] %d\n", job.id, (int)pid);
+    last_bg = pid;
     fflush(stdout);
     last_status = 0;
     schedule_tick();                      // it may get the CPU straight away

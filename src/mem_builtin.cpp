@@ -23,6 +23,7 @@
 
 #include "builtins.hpp"
 #include "mkernel.h"
+#include "security.hpp"
 #include "shell.hpp"
 
 using Args = std::vector<std::string>;
@@ -378,6 +379,12 @@ int builtin_mem(Shell& sh, const Args& a) {
   sh.reap_children(false);
   std::string sub = a.size() > 1 ? a[1] : "";
   MemoryManager& mm = sh.kern.mm;
+  {
+    bool changes = ((sub == "config" || sub == "policy") && a.size() > 2) || sub == "reset" ||
+                   (sub == "shm" && a.size() > 2);
+    Security& sec = Security::get();
+    if (changes && !sec.allow(sec.require_admin("mem " + sub + " (a system-wide memory setting)"), "mem", "")) return 1;
+  }
   if (sub.empty() || sub == "status") {
     print_config(sh);
     print_frames(sh, true);
@@ -510,6 +517,19 @@ int builtin_sem(Shell& sh, const Args& a) {
   std::string sub = a.size() > 1 ? a[1] : "";
   std::string why;
   long now = sh.now_ms();
+  Security& sec = Security::get();
+  if ((sub == "reset" || (sub == "config" && a.size() > 2)) && !sec.allow(sec.require_admin("sem " + sub + " (a system-wide setting)"), "sem", ""))
+    return 1;
+  if ((sub == "post" || sub == "rm") && a.size() == 3) {        // only the creator or admin
+    const SyncObj* o = sy.find(a[2]);
+    if (o && !sec.is_admin() && !o->creator.empty() && o->creator != sec.user()) {
+      Decision d;
+      d.ok = false;
+      d.why = "'" + a[2] + "' was created by " + o->creator + "; only its creator or admin may " + sub + " it from the prompt";
+      sec.allow(d, ("sem " + sub).c_str(), "");
+      return 1;
+    }
+  }
   if (sub.empty() || sub == "list") { print_sems(sh); return 0; }
   if (sub == "help" || sub == "-h" || sub == "--help") { sem_usage(); return 0; }
   if (sub == "create") {

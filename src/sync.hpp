@@ -47,6 +47,7 @@ struct SyncObj {
   long value = 0;               // semaphore count; mutex: 1 = free, 0 = locked
   pid_t owner = 0;              // mutex holder (0 = none)
   std::deque<SyncWaiter> waiters;
+  std::string creator;          // Deliverable 4: the user who created it
   // statistics
   long acquires = 0;            // successful P() / lock
   long contended = 0;           // ...of which had to wait
@@ -62,6 +63,7 @@ class SyncManager {
  public:
   std::function<void(const char* kind, const std::string& detail)> log;
   std::function<std::string(pid_t)> label;                     // "philo 2 (pid 123)"
+  std::function<std::string(pid_t)> user_of;                   // owner of a process (0 = the shell's user)
   std::function<void(pid_t, int status, uint32_t flags)> wake; // answer a waiter's request now
   std::function<void(const std::string& report)> deadlock;     // a cycle was found
   bool fail_on_deadlock = false;

@@ -48,6 +48,7 @@ int SyncManager::open(pid_t pid, const std::string& name, int kind, long initial
   o.name = name;
   o.kind = kind;
   o.value = kind == MK_MUTEX ? 1 : initial;
+  if (user_of) o.creator = user_of(pid);
   emit("CREATE", std::string(kind_name(kind)) + " '" + name + "'" +
                      (kind == MK_MUTEX ? " (unlocked)" : " = " + std::to_string(initial)) +
                      (pid ? " by " + who(pid) : " from the prompt"));

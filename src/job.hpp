@@ -38,6 +38,7 @@ struct Job {
   pid_t pid = 0;         // process id of the (single) process in the job
   pid_t pgid = 0;        // process group id (== pid: each job leads its own group)
   std::string command;   // source text of the command, e.g. "sleep 30"
+  std::string owner;     // Deliverable 4: the user who started it (job control is per user)
 
   // ---- state ------------------------------------------------------------
   JobState state = JobState::New;

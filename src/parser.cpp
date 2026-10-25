@@ -16,7 +16,7 @@ static bool is_delim(char c) {
 // Returns false (with error_ set) on malformed ${...}.
 bool Parser::expand_var(std::string& out) {
   char n = pos_ + 1 < line_.size() ? line_[pos_ + 1] : '\0';
-  if (n == '?' || n == '$') {                       // $? and $$
+  if (n == '?' || n == '$' || n == '!') {           // $?, $$ and $!
     out += lookup_(std::string(1, n));
     pos_ += 2;
   } else if (n == '{') {                            // ${NAME}
@@ -113,13 +113,11 @@ Parser::Token Parser::lex() {
   switch (c) {
     case ';': ++pos_; t.kind = Tok::Semi; t.end = pos_; return t;
     case '&':
-      if (nx == '&') { error_ = "'&&' is not supported yet"; t.kind = Tok::Error; return t; }
+      if (nx == '&') { error_ = "'&&' is not supported"; t.kind = Tok::Error; return t; }
       ++pos_; t.kind = Tok::Amp; t.end = pos_; return t;
     case '|':
-      error_ = (nx == '|') ? "'||' is not supported yet"
-                           : "pipes ('|') are not supported yet (planned for a later deliverable)";
-      t.kind = Tok::Error;
-      return t;
+      if (nx == '|') { error_ = "'||' is not supported"; t.kind = Tok::Error; return t; }
+      ++pos_; t.kind = Tok::Pipe; t.end = pos_; return t;
     case '<': ++pos_; t.kind = Tok::In; t.fd = 0; t.end = pos_; return t;
     case '>':
       if (nx == '>') { pos_ += 2; t.kind = Tok::Append; } else { ++pos_; t.kind = Tok::Out; }
@@ -141,17 +139,45 @@ Parser::Token Parser::lex() {
   return t;
 }
 
-Parser::Status Parser::next(Command& out) {
-  out = Command{};
-  size_t first = std::string::npos, last = 0;   // source span of this command
+Parser::Status Parser::next(Command& result) {
+  result = Command{};
+  Command out;                                  // the stage being read
+  std::vector<Command> stages;                  // finished stages of a pipeline
+  size_t first = std::string::npos, last = 0;   // source span of the whole pipeline
+  size_t stage_first = std::string::npos;       // source span of the current stage
 
+  auto end_stage = [&]() -> bool {
+    if (out.argv.empty()) {
+      error_ = stages.empty() && first == std::string::npos ? "syntax error near unexpected token '|'"
+                                                            : "syntax error: missing command in pipeline";
+      return false;
+    }
+    out.text = line_.substr(stage_first, last - stage_first);
+    stages.push_back(out);
+    out = Command{};
+    stage_first = std::string::npos;
+    return true;
+  };
   auto finish = [&]() -> Status {
-    if (out.argv.empty()) { error_ = "syntax error: missing command name"; return Status::Error; }
-    out.text = line_.substr(first, last - first);
+    if (out.argv.empty()) {
+      error_ = stages.empty() ? "syntax error: missing command name" : "syntax error: missing command after '|'";
+      return Status::Error;
+    }
+    bool bg = out.background;
+    if (!end_stage()) return Status::Error;
+    if (stages.size() == 1) {
+      result = stages[0];
+    } else {
+      result = stages[0];
+      result.pipeline = stages;
+    }
+    result.background = bg;
+    result.text = line_.substr(first, last - first);
     return Status::Command;
   };
   auto note = [&](const Token& t) {
     if (first == std::string::npos) first = t.begin;
+    if (stage_first == std::string::npos) stage_first = t.begin;
     last = t.end;
   };
 
@@ -189,7 +215,24 @@ Parser::Status Parser::next(Command& out) {
         break;
       }
 
+      case Tok::Pipe:
+        if (out.argv.empty()) {
+          error_ = out.redirs.empty() && stages.empty() ? "syntax error near unexpected token '|'"
+                                                        : "syntax error: missing command before '|'";
+          return Status::Error;
+        }
+        if (stages.size() + 1 >= kMaxStages) {
+          error_ = "too many commands in one pipeline (limit " + std::to_string(kMaxStages) + ")";
+          return Status::Error;
+        }
+        if (!end_stage()) return Status::Error;
+        break;
+
       case Tok::Semi: case Tok::Amp:
+        if (!stages.empty() && out.argv.empty()) {
+          error_ = "syntax error: missing command after '|'";
+          return Status::Error;
+        }
         if (out.argv.empty() && out.redirs.empty()) {
           error_ = std::string("syntax error near unexpected token '") +
                    (t.kind == Tok::Semi ? ";" : "&") + "'";
@@ -199,6 +242,10 @@ Parser::Status Parser::next(Command& out) {
         return finish();
 
       case Tok::Eof:
+        if (!stages.empty() && out.argv.empty()) {
+          error_ = "syntax error: missing command after '|'";
+          return Status::Error;
+        }
         if (out.argv.empty() && out.redirs.empty()) return Status::End;
         return finish();
     }
